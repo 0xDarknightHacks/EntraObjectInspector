@@ -119,6 +119,20 @@ Invoke-EntraSecurityAssessment `
 
 The command performs authentication, snapshot collection, tenant inspection, assessment intelligence, structured export, and HTML report generation.
 
+## Preview
+
+### CLI assessment
+
+![Entra Object Inspector CLI assessment](docs/images/cli-assessment.png)
+
+### Assessment summary
+
+![Entra Object Inspector assessment summary](docs/images/report-summary.png)
+
+### Evidence-backed finding
+
+![Entra Object Inspector grouped finding](docs/images/grouped-finding.png)
+
 ## Public Commands
 
 The module exposes seven public commands:
