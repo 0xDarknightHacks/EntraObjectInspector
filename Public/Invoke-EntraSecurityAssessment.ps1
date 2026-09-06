@@ -1,0 +1,1040 @@
+function Invoke-EntraSecurityAssessment {
+    <#
+    .SYNOPSIS
+        Runs the full Entra Object Inspector assessment workflow.
+
+    .DESCRIPTION
+        Orchestrates the existing read-only workflow: connect to Microsoft Graph,
+        inspect tenant objects, generate assessment intelligence, export structured
+        JSON/CSV artifacts, and create a static HTML report.
+
+        This command does not implement assessment logic directly and does not call
+        Microsoft Graph outside the existing connection and inspection commands.
+    #>
+
+    [CmdletBinding()]
+    param (
+        [string]$AssessmentName = 'Entra Object Inspector Assessment',
+
+        [string]$OutputDirectory = '.\EntraObjectInspector-Exports',
+
+        [string]$ReportPath,
+
+        [ValidateSet('Application', 'ServicePrincipal', 'User', 'Group')]
+        [string[]]$ObjectType = @(
+            'Application',
+            'ServicePrincipal',
+            'User',
+            'Group'
+        ),
+
+        [int]$MaxObjectsPerType = 0,
+
+        [ValidateRange(1, 500)]
+        [int]$BatchSize = 25,
+
+        [ValidateRange(0, 600000)]
+        [int]$ThrottleDelayMilliseconds = 0,
+
+        [ValidateRange(0, 10)]
+        [int]$MaxRetryCount = 2,
+
+        [string]$CheckpointPath,
+
+        [switch]$Resume,
+
+        [switch]$NoProgress,
+
+        [switch]$SkipConnect,
+
+        [switch]$KeepGraphSession,
+
+        [switch]$OpenReport,
+
+        [string]$LogDirectory,
+
+        [switch]$NoDiagnosticLog,
+
+        [string]$ClientName = '',
+
+        [string]$ConsultantName = '',
+
+        [switch]$PassThru
+    )
+
+    $commandStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $runLog = $null
+    $graphSessionDisconnectAttempted = $false
+    $graphSessionDisconnected = $false
+    $reportOpened = $false
+    $finalStatus = 'Failed'
+    $stage = 'Initialize'
+    $connectedByCommand = $false
+    $stageStatus = [ordered]@{}
+    $tenantResult = $null
+    $intelligence = $null
+    $exportResult = $null
+    $reportResult = $null
+    $runtimeTelemetry = $null
+    $orchestrationTelemetry = $null
+    $result = $null
+    $reportId = [guid]::NewGuid().ToString()
+    $packageValidationStatus = 'NotRun'
+    $releaseEligible = $false
+    $packageValidationErrors = @()
+    $packageValidationWarnings = @()
+    $failedObjectCount = 0
+    $previousRuntimeTelemetryVariable = Get-Variable -Name 'InspectorCurrentRuntimeTelemetry' -Scope Script -ErrorAction SilentlyContinue
+    $hadPreviousRuntimeTelemetry = $null -ne $previousRuntimeTelemetryVariable
+    $previousRuntimeTelemetry = if ($hadPreviousRuntimeTelemetry) { $previousRuntimeTelemetryVariable.Value } else { $null }
+    $runtimeTelemetry = New-InspectorRuntimeTelemetry
+    $script:InspectorCurrentRuntimeTelemetry = $runtimeTelemetry
+
+    function Write-InspectorAssessmentStage {
+        param (
+            [int]$Step,
+            [string]$Name
+        )
+
+        $message = "[$Step/7] $Name"
+
+        if (-not $NoProgress -and (Test-InspectorAssessmentInteractiveConsole)) {
+            Write-Progress -Activity 'Entra Object Inspector assessment' -Status $message -PercentComplete ([math]::Min(100, [math]::Round(($Step / 7) * 100)))
+        }
+
+        Write-Information $message -InformationAction Continue
+    }
+
+    function Test-InspectorAssessmentInteractiveConsole {
+        if (-not [Environment]::UserInteractive) {
+            return $false
+        }
+
+        try {
+            return -not [Console]::IsOutputRedirected
+        }
+        catch {
+            # Some non-console PowerShell hosts do not expose Console state.
+            # In those hosts, retain the normal host-display behavior.
+            return $true
+        }
+    }
+
+    function Test-InspectorAssessmentColorEnabled {
+        if (-not (Test-InspectorAssessmentInteractiveConsole)) {
+            return $false
+        }
+
+        if (-not [string]::IsNullOrEmpty([Environment]::GetEnvironmentVariable('NO_COLOR'))) {
+            return $false
+        }
+
+        if ([string]::Equals([Environment]::GetEnvironmentVariable('TERM'), 'dumb', [System.StringComparison]::OrdinalIgnoreCase)) {
+            return $false
+        }
+
+        return $true
+    }
+
+    function Write-InspectorAssessmentBanner {
+        if (-not (Test-InspectorAssessmentInteractiveConsole)) {
+            return
+        }
+
+        $banner = @'
+
+┌──────────────────────────────────────────────────────────────────────┐
+│   ____ ____ ____ ____ ____ _________ ____ ____ ____ ____ ____ ____   │
+│  ||E |||n |||t |||r |||a |||       |||O |||b |||j |||e |||c |||t ||  │
+│  ||__|||__|||__|||__|||__|||_______|||__|||__|||__|||__|||__|||__||  │
+│  |/__\|/__\|/__\|/__\|/__\|/_______\|/__\|/__\|/__\|/__\|/__\|/__\|  │
+│           ____ ____ ____ ____ ____ ____ ____ ____ ____               │
+│          ||I |||n |||s |||p |||e |||c |||t |||o |||r ||              │
+│          ||__|||__|||__|||__|||__|||__|||__|||__|||__||              │
+│          |/__\|/__\|/__\|/__\|/__\|/__\|/__\|/__\|/__\|              │
+└──────────────────────────────────────────────────────────────────────┘
+
+'@
+
+        $useColor = Test-InspectorAssessmentColorEnabled
+        if ($useColor) {
+            Write-Host $banner -ForegroundColor Cyan
+            Write-Host '  Read-only Microsoft Entra security assessment' -ForegroundColor DarkGray
+            Write-Host '  GitHub: https://github.com/0xDarknightHacks' -ForegroundColor DarkGray
+            Write-Host ("  Assessment: {0}" -f $AssessmentName) -ForegroundColor DarkGray
+        }
+        else {
+            Write-Host $banner
+            Write-Host '  Read-only Microsoft Entra security assessment'
+            Write-Host '  GitHub: https://github.com/0xDarknightHacks'
+            Write-Host ("  Assessment: {0}" -f $AssessmentName)
+        }
+
+        Write-Host ''
+    }
+
+    function Write-InspectorAssessmentCompletion {
+        param (
+            [AllowNull()][object]$AssessmentResult
+        )
+
+        if ($null -eq $AssessmentResult -or -not (Test-InspectorAssessmentInteractiveConsole)) {
+            return
+        }
+
+        $status = [string](Get-InspectorObjectInsightProperty -InputObject $AssessmentResult -Name 'Status')
+        $releaseEligibleValue = Get-InspectorObjectInsightProperty -InputObject $AssessmentResult -Name 'ReleaseEligible'
+        $releaseEligible = $false
+        if ($null -ne $releaseEligibleValue) {
+            $releaseEligible = [System.Convert]::ToBoolean($releaseEligibleValue)
+        }
+
+        $successful = $status -eq 'Success' -and $releaseEligible
+        $marker = if ($successful) { 'OK' } else { '!' }
+        $headline = if ($successful) { 'Assessment complete' } else { "Assessment complete with status '$status'" }
+        $useColor = Test-InspectorAssessmentColorEnabled
+
+        Write-Host ''
+        if ($useColor) {
+            Write-Host ("[{0}] {1}" -f $marker, $headline) -ForegroundColor $(if ($successful) { 'Green' } else { 'Yellow' })
+            Write-Host ("     Package: {0} | Release eligible: {1}" -f (Get-InspectorObjectInsightProperty -InputObject $AssessmentResult -Name 'PackageValidationStatus'), $releaseEligible) -ForegroundColor DarkGray
+            Write-Host ("     Export : {0}" -f (Get-InspectorObjectInsightProperty -InputObject $AssessmentResult -Name 'ExportDirectory')) -ForegroundColor DarkGray
+            Write-Host ("     Report : {0}" -f (Get-InspectorObjectInsightProperty -InputObject $AssessmentResult -Name 'ReportPath')) -ForegroundColor DarkGray
+        }
+        else {
+            Write-Host ("[{0}] {1}" -f $marker, $headline)
+            Write-Host ("     Package: {0} | Release eligible: {1}" -f (Get-InspectorObjectInsightProperty -InputObject $AssessmentResult -Name 'PackageValidationStatus'), $releaseEligible)
+            Write-Host ("     Export : {0}" -f (Get-InspectorObjectInsightProperty -InputObject $AssessmentResult -Name 'ExportDirectory'))
+            Write-Host ("     Report : {0}" -f (Get-InspectorObjectInsightProperty -InputObject $AssessmentResult -Name 'ReportPath'))
+        }
+    }
+
+    function Set-InspectorAssessmentStageStatus {
+        param (
+            [string]$Name,
+            [string]$Status
+        )
+
+        $stageStatus[$Name] = $Status
+        if ($null -ne $runLog) {
+            $runLog.StageStatus[$Name] = $Status
+        }
+    }
+
+    function Get-InspectorAssessmentStageDurationMs {
+        param (
+            [AllowNull()][object]$StageDurations,
+            [string]$Name
+        )
+
+        if ($null -eq $StageDurations -or [string]::IsNullOrWhiteSpace($Name)) {
+            return $null
+        }
+
+        $stageRecord = $null
+        if ($StageDurations -is [System.Collections.IDictionary]) {
+            if ($StageDurations.Contains($Name)) {
+                $stageRecord = $StageDurations[$Name]
+            }
+        }
+        else {
+            $stageRecord = Get-InspectorObjectInsightProperty -InputObject $StageDurations -Name $Name
+        }
+
+        return Get-InspectorObjectInsightProperty -InputObject $stageRecord -Name 'DurationMs'
+    }
+
+    # CLI decoration is best-effort and must never affect assessment execution.
+    try { Write-InspectorAssessmentBanner } catch { }
+
+    try {
+        New-Item `
+            -ItemType Directory `
+            -Path $OutputDirectory `
+            -Force |
+            Out-Null
+
+        $runLog =
+            New-InspectorRunLog `
+                -AssessmentName $AssessmentName `
+                -OutputDirectory $OutputDirectory `
+                -LogDirectory $LogDirectory `
+                -Disabled:$NoDiagnosticLog
+
+        Write-InspectorDiagnosticEvent -RunLog $runLog -Stage 'Initialize' -EventName 'AssessmentStarted' -Message 'Assessment orchestration started.'
+
+        if (-not $SkipConnect) {
+            $stage = 'Authentication'
+            Write-InspectorAssessmentStage -Step 1 -Name 'Authenticating'
+            Set-InspectorAssessmentStageStatus -Name $stage -Status 'Running'
+            Write-InspectorDiagnosticEvent -RunLog $runLog -Stage $stage -EventName 'AuthenticationStarted' -Message 'Connecting to Microsoft Graph.'
+            Connect-InspectorGraph | Out-Null
+            $connectedByCommand = $true
+            Set-InspectorAssessmentStageStatus -Name $stage -Status 'Success'
+            Write-InspectorDiagnosticEvent -RunLog $runLog -Stage $stage -EventName 'AuthenticationCompleted' -Message 'Microsoft Graph connection completed.'
+        }
+        else {
+            Set-InspectorAssessmentStageStatus -Name 'Authentication' -Status 'Skipped'
+            Write-InspectorDiagnosticEvent -RunLog $runLog -Stage 'Authentication' -EventName 'AuthenticationSkipped' -Message 'Graph connection skipped; caller-owned session assumed.'
+        }
+
+        if ([string]::IsNullOrWhiteSpace($ReportPath)) {
+            $ReportPath =
+                Join-Path `
+                    -Path $OutputDirectory `
+                    -ChildPath 'entra-object-inspector-report.html'
+        }
+
+        $reportParent =
+            Split-Path `
+                -Path $ReportPath `
+                -Parent
+
+        if (-not [string]::IsNullOrWhiteSpace($reportParent)) {
+            New-Item `
+                -ItemType Directory `
+                -Path $reportParent `
+                -Force |
+                Out-Null
+        }
+
+        $tenantParameters = @{
+            ObjectType                 = $ObjectType
+            MaxObjectsPerType          = $MaxObjectsPerType
+            BatchSize                  = $BatchSize
+            ThrottleDelayMilliseconds  = $ThrottleDelayMilliseconds
+            MaxRetryCount              = $MaxRetryCount
+            Resume                     = $Resume
+            NoProgress                 = $NoProgress
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($CheckpointPath)) {
+            $tenantParameters.CheckpointPath = $CheckpointPath
+        }
+
+        $stage = 'TenantInspection'
+        Write-InspectorAssessmentStage -Step 2 -Name 'Collecting tenant snapshot'
+        Write-InspectorAssessmentStage -Step 3 -Name 'Processing objects offline'
+        Set-InspectorAssessmentStageStatus -Name $stage -Status 'Running'
+        Write-InspectorDiagnosticEvent -RunLog $runLog -Stage $stage -EventName 'TenantInspectionStarted' -Message 'Tenant snapshot collection and offline object processing started.'
+        $tenantInspectionStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $script:InspectorCurrentRunLog = $runLog
+        $tenantResult =
+            Invoke-EntraTenantInspection @tenantParameters
+        $script:InspectorCurrentRunLog = $null
+        $tenantInspectionStopwatch.Stop()
+        $returnedRuntimeTelemetry = Get-InspectorObjectInsightProperty -InputObject $tenantResult -Name 'RuntimeTelemetry'
+        if ($null -ne $returnedRuntimeTelemetry -and -not [object]::ReferenceEquals($runtimeTelemetry, $returnedRuntimeTelemetry)) {
+            $runtimeTelemetry = $returnedRuntimeTelemetry
+            $script:InspectorCurrentRuntimeTelemetry = $runtimeTelemetry
+        }
+        Set-InspectorAssessmentStageStatus -Name $stage -Status $tenantResult.Status
+        Write-InspectorDiagnosticEvent -RunLog $runLog -Stage $stage -EventName 'TenantInspectionCompleted' -Message "Tenant inspection completed with status '$($tenantResult.Status)'."
+        $failedObjectCount = @(
+            Get-InspectorObjectInsightProperty -InputObject $tenantResult -Name 'FailedObjects'
+        ).Count
+
+        $stage = 'AssessmentIntelligence'
+        Write-InspectorAssessmentStage -Step 4 -Name 'Building assessment intelligence'
+        Set-InspectorAssessmentStageStatus -Name $stage -Status 'Running'
+        Write-InspectorDiagnosticEvent -RunLog $runLog -Stage $stage -EventName 'AssessmentIntelligenceStarted' -Message 'Assessment intelligence generation started.'
+        $assessmentIntelligenceStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $intelligence =
+            Invoke-EntraAssessmentIntelligence `
+                -InputObject $tenantResult `
+                -AssessmentName $AssessmentName
+        $assessmentIntelligenceStopwatch.Stop()
+        Set-InspectorAssessmentStageStatus -Name $stage -Status 'Success'
+        Write-InspectorDiagnosticEvent -RunLog $runLog -Stage $stage -EventName 'AssessmentIntelligenceCompleted' -Message 'Assessment intelligence generation completed.'
+
+        $stage = 'Export'
+        Write-InspectorAssessmentStage -Step 5 -Name 'Exporting structured artifacts'
+        Set-InspectorAssessmentStageStatus -Name $stage -Status 'Running'
+        Write-InspectorDiagnosticEvent -RunLog $runLog -Stage $stage -EventName 'ExportStarted' -Message 'Structured export started.'
+        $exportStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $exportResult =
+            Export-EntraTenantInspection `
+                -InputObject $tenantResult `
+                -AssessmentIntelligence $intelligence `
+                -OutputDirectory $OutputDirectory `
+                -AssessmentName $AssessmentName `
+                -RunId $runLog.RunId `
+                -ReportId $reportId
+        $exportStopwatch.Stop()
+        Set-InspectorAssessmentStageStatus -Name $stage -Status $exportResult.Status
+        Write-InspectorDiagnosticEvent -RunLog $runLog -Stage $stage -EventName 'ExportCompleted' -Message "Structured export completed with status '$($exportResult.Status)'."
+
+        $stage = 'Report'
+        Write-InspectorAssessmentStage -Step 6 -Name 'Generating HTML report'
+        Set-InspectorAssessmentStageStatus -Name $stage -Status 'Running'
+        Write-InspectorDiagnosticEvent -RunLog $runLog -Stage $stage -EventName 'ReportStarted' -Message 'HTML report generation started.'
+        $stageSummary =
+            Get-InspectorObjectInsightProperty `
+                -InputObject $runtimeTelemetry `
+                -Name 'StageSummary'
+
+        $stageDurations =
+            Get-InspectorObjectInsightProperty `
+                -InputObject $runtimeTelemetry `
+                -Name 'StageDurations'
+
+        $offlineStageDurationValues = @(
+            foreach ($offlineStageName in @(
+                'OfflineResolution'
+                'OfflineRelationshipBuilding'
+                'Normalization'
+                'PermissionIntelligence'
+                'ObservationEngine'
+            )) {
+                $duration = Get-InspectorAssessmentStageDurationMs -StageDurations $stageDurations -Name $offlineStageName
+                if ($null -ne $duration) {
+                    [double]$duration
+                }
+            }
+        )
+
+        $offlineStartedAt = Get-InspectorObjectInsightProperty -InputObject $tenantResult -Name 'OfflineProcessingStartedAt'
+        $offlineCompletedAt = Get-InspectorObjectInsightProperty -InputObject $tenantResult -Name 'OfflineProcessingCompletedAt'
+        $offlineProcessingDurationMs =
+            if ($null -ne $offlineStartedAt -and $null -ne $offlineCompletedAt) {
+                [int](([datetime]$offlineCompletedAt - [datetime]$offlineStartedAt).TotalMilliseconds)
+            }
+            elseif ($offlineStageDurationValues.Count -gt 0) {
+                [int](($offlineStageDurationValues | Measure-Object -Sum).Sum)
+            }
+            else {
+                $null
+            }
+
+        $snapshotCollectionDurationMs =
+            Get-InspectorObjectInsightProperty -InputObject $stageSummary -Name 'TenantSnapshotCollectionDurationMs'
+        if ($null -eq $snapshotCollectionDurationMs) {
+            $snapshotCollectionDurationMs =
+                Get-InspectorAssessmentStageDurationMs -StageDurations $stageDurations -Name 'TenantSnapshotCollection'
+        }
+
+        $orchestrationTelemetry = [PSCustomObject][ordered]@{
+            PSTypeName                        = 'EntraObjectInspector.OrchestrationTelemetry'
+            SchemaVersion                     = '1.0.0'
+            RunId                             = $runLog.RunId
+            CommandStatus                     = 'Success'
+            TenantInspectionStatus            = $tenantResult.Status
+            TenantInspectionDurationMs        = $tenantInspectionStopwatch.ElapsedMilliseconds
+            SnapshotCollectionDurationMs      = $snapshotCollectionDurationMs
+            OfflineProcessingDurationMs       = $(if ($null -ne (Get-InspectorObjectInsightProperty -InputObject $stageSummary -Name 'OfflineProcessingDurationMs')) { Get-InspectorObjectInsightProperty -InputObject $stageSummary -Name 'OfflineProcessingDurationMs' } else { $offlineProcessingDurationMs })
+            AssessmentIntelligenceDurationMs  = $assessmentIntelligenceStopwatch.ElapsedMilliseconds
+            ExportDurationMs                  = $exportStopwatch.ElapsedMilliseconds
+            ExportPerformanceProfile          = Get-InspectorObjectInsightProperty -InputObject $exportResult -Name 'PerformanceProfile'
+            ReportGenerationDurationMs        = 0
+            ReportPerformanceProfile          = $null
+            TotalCommandDurationMs            = $commandStopwatch.ElapsedMilliseconds
+            GraphRequestSummary               = Get-InspectorObjectInsightProperty -InputObject $runtimeTelemetry -Name 'GraphRequestSummary'
+            RetrySummary                      = Get-InspectorObjectInsightProperty -InputObject $runtimeTelemetry -Name 'RetrySummary'
+            ThrottlingSummary                 = Get-InspectorObjectInsightProperty -InputObject $runtimeTelemetry -Name 'ThrottlingSummary'
+            ExternalEndpointSummary           = Get-InspectorObjectInsightProperty -InputObject $runtimeTelemetry -Name 'ExternalEndpointSummary'
+            OutputArtifactSummary             = [PSCustomObject][ordered]@{
+                ExportDirectory = $exportResult.ExportDirectory
+                DiagnosticsLogPath = $runLog.DiagnosticsLogPath
+            }
+        }
+
+        $reportStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $reportResult =
+            Export-EntraAssessmentReport `
+                -ExportDirectory $exportResult.ExportDirectory `
+                -OrchestrationTelemetry $orchestrationTelemetry `
+                -AssessmentName $AssessmentName `
+                -OutputPath $ReportPath `
+                -ClientName $ClientName `
+                -ConsultantName $ConsultantName `
+                -Force
+        $reportStopwatch.Stop()
+        $orchestrationTelemetry.ReportGenerationDurationMs = $reportStopwatch.ElapsedMilliseconds
+        $orchestrationTelemetry.ReportPerformanceProfile =
+            Get-InspectorObjectInsightProperty -InputObject $reportResult -Name 'PerformanceProfile'
+        Set-InspectorAssessmentStageStatus -Name $stage -Status $reportResult.Status
+        Write-InspectorDiagnosticEvent -RunLog $runLog -Stage $stage -EventName 'ReportCompleted' -Message "HTML report generation completed with status '$($reportResult.Status)'."
+
+        $graphRequestsAtSnapshotCompletion = [int](Get-InspectorObjectInsightProperty -InputObject $tenantResult -Name 'GraphRequestsAtSnapshotCompletion')
+        $graphRequestsAtAssessmentCompletion = [int](Get-InspectorObjectInsightProperty -InputObject (Get-InspectorObjectInsightProperty -InputObject $runtimeTelemetry -Name 'GraphRequestSummary') -Name 'TotalRequests')
+        $graphCallsAfterSnapshot = $graphRequestsAtAssessmentCompletion - $graphRequestsAtSnapshotCompletion
+        foreach ($telemetryTarget in @($tenantResult, $runtimeTelemetry)) {
+            if ($null -ne $telemetryTarget) {
+                $telemetryTarget | Add-Member -NotePropertyName GraphRequestsAtSnapshotCompletion -NotePropertyValue $graphRequestsAtSnapshotCompletion -Force
+                $telemetryTarget | Add-Member -NotePropertyName GraphRequestsAtAssessmentCompletion -NotePropertyValue $graphRequestsAtAssessmentCompletion -Force
+                $telemetryTarget | Add-Member -NotePropertyName GraphCallsAfterSnapshot -NotePropertyValue $graphCallsAfterSnapshot -Force
+            }
+        }
+        if ($null -ne (Get-InspectorObjectInsightProperty -InputObject $tenantResult -Name 'Summary')) {
+            $tenantResult.Summary | Add-Member -NotePropertyName GraphRequestsAtSnapshotCompletion -NotePropertyValue $graphRequestsAtSnapshotCompletion -Force
+            $tenantResult.Summary | Add-Member -NotePropertyName GraphRequestsAtAssessmentCompletion -NotePropertyValue $graphRequestsAtAssessmentCompletion -Force
+            $tenantResult.Summary | Add-Member -NotePropertyName GraphCallsAfterSnapshot -NotePropertyValue $graphCallsAfterSnapshot -Force
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace([string]$exportResult.ExportDirectory)) {
+            $manifestPath = Join-Path $exportResult.ExportDirectory 'assessment-manifest.json'
+            $summaryPath = Join-Path $exportResult.ExportDirectory 'assessment-summary.json'
+            if ((Test-Path -LiteralPath $manifestPath -PathType Leaf) -and (Test-Path -LiteralPath $summaryPath -PathType Leaf)) {
+            $finalManifest = Read-InspectorReportJsonFile -Path $manifestPath
+            $finalSummary = Read-InspectorReportJsonFile -Path $summaryPath
+            foreach ($packageObject in @($finalManifest, $finalSummary)) {
+                $packageObject | Add-Member -NotePropertyName GraphRequestsAtSnapshotCompletion -NotePropertyValue $graphRequestsAtSnapshotCompletion -Force
+                $packageObject | Add-Member -NotePropertyName GraphRequestsAtAssessmentCompletion -NotePropertyValue $graphRequestsAtAssessmentCompletion -Force
+                $packageObject | Add-Member -NotePropertyName GraphCallsAfterSnapshot -NotePropertyValue $graphCallsAfterSnapshot -Force
+            }
+            Write-InspectorJsonFile -Path $summaryPath -Value $finalSummary
+            for ($pass = 0; $pass -lt 3; $pass++) { Update-InspectorExportArtifactSizes -Manifest $finalManifest -BasePath $exportResult.ExportDirectory; Write-InspectorJsonFile -Path $manifestPath -Value $finalManifest }
+            $finalReportModel = Get-InspectorReportModelFromDirectory -ExportDirectory $exportResult.ExportDirectory -AssessmentName $AssessmentName -ClientName $ClientName -ConsultantName $ConsultantName
+            Write-InspectorJsonFile -Path $summaryPath -Value $finalReportModel.Summary
+            for ($pass = 0; $pass -lt 3; $pass++) { Update-InspectorExportArtifactSizes -Manifest $finalReportModel.Manifest -BasePath $exportResult.ExportDirectory; Write-InspectorJsonFile -Path $manifestPath -Value $finalReportModel.Manifest }
+            $reportResult | Add-Member -NotePropertyName PackageValidationStatus -NotePropertyValue $finalReportModel.PackageValidationStatus -Force
+            $reportResult | Add-Member -NotePropertyName ReleaseEligible -NotePropertyValue $finalReportModel.ReleaseEligible -Force
+            $reportResult | Add-Member -NotePropertyName PackageValidationErrors -NotePropertyValue @($finalReportModel.PackageValidationErrors) -Force
+            $reportResult | Add-Member -NotePropertyName PackageValidationWarnings -NotePropertyValue @($finalReportModel.PackageValidationWarnings) -Force
+            }
+        }
+
+        if ($OpenReport -and $reportResult.Status -eq 'Success' -and -not [string]::IsNullOrWhiteSpace([string]$reportResult.ReportPath)) {
+            try {
+                if ($IsWindows) {
+                    Invoke-Item -LiteralPath $reportResult.ReportPath
+                }
+                elseif ($IsMacOS) {
+                    & open $reportResult.ReportPath
+                }
+                elseif ($IsLinux) {
+                    & xdg-open $reportResult.ReportPath
+                }
+                else {
+                    throw 'Unsupported operating system for automatic report opening.'
+                }
+
+                $reportOpened = $true
+                Write-InspectorDiagnosticEvent -RunLog $runLog -Stage 'Report' -EventName 'ReportOpened' -Message 'HTML report was opened.'
+            }
+            catch {
+                Write-Warning "Could not open HTML report automatically: $($_.Exception.Message)"
+                Write-InspectorDiagnosticEvent -RunLog $runLog -Stage 'Report' -Level 'Warning' -EventName 'ReportOpenFailed' -Message 'Could not open HTML report automatically.' -Exception $_
+            }
+        }
+
+        $graphSummary =
+            Get-InspectorObjectInsightProperty `
+                -InputObject $runtimeTelemetry `
+                -Name 'GraphRequestSummary'
+
+        $throttlingSummary =
+            Get-InspectorObjectInsightProperty `
+                -InputObject $runtimeTelemetry `
+                -Name 'ThrottlingSummary'
+
+        $retrySummary =
+            Get-InspectorObjectInsightProperty `
+                -InputObject $runtimeTelemetry `
+                -Name 'RetrySummary'
+
+        $throughputSummary =
+            Get-InspectorObjectInsightProperty `
+                -InputObject $runtimeTelemetry `
+                -Name 'ThroughputSummary'
+
+        $memorySummary =
+            Get-InspectorObjectInsightProperty `
+                -InputObject $runtimeTelemetry `
+                -Name 'MemorySummary'
+
+        $externalEndpointSummary =
+            Get-InspectorObjectInsightProperty `
+                -InputObject $runtimeTelemetry `
+                -Name 'ExternalEndpointSummary'
+
+        $totalArtifactSizeBytes = 0
+
+        if (
+            -not [string]::IsNullOrWhiteSpace([string]$exportResult.ExportDirectory) -and
+            (Test-Path -LiteralPath $exportResult.ExportDirectory)
+        ) {
+            $totalArtifactSizeBytes += @(
+                Get-ChildItem `
+                    -LiteralPath $exportResult.ExportDirectory `
+                    -File `
+                    -Recurse `
+                    -ErrorAction SilentlyContinue |
+                Measure-Object -Property Length -Sum
+            )[0].Sum
+        }
+
+        if (
+            -not [string]::IsNullOrWhiteSpace([string]$reportResult.ReportPath) -and
+            (Test-Path -LiteralPath $reportResult.ReportPath)
+        ) {
+            $totalArtifactSizeBytes += (Get-Item -LiteralPath $reportResult.ReportPath).Length
+        }
+
+        $diagnosticsReportPath =
+            Get-InspectorObjectInsightProperty `
+                -InputObject $reportResult `
+                -Name 'DiagnosticsReportPath'
+
+        $evidenceReportPath =
+            Get-InspectorObjectInsightProperty `
+                -InputObject $reportResult `
+                -Name 'EvidenceReportPath'
+
+        foreach ($sidecarPath in @($diagnosticsReportPath, $evidenceReportPath)) {
+            if (
+                -not [string]::IsNullOrWhiteSpace([string]$sidecarPath) -and
+                (Test-Path -LiteralPath $sidecarPath)
+            ) {
+                $totalArtifactSizeBytes += (Get-Item -LiteralPath $sidecarPath).Length
+            }
+        }
+
+        if ($null -ne $runtimeTelemetry) {
+            $runtimeTelemetry.OutputArtifactSummary.ExportDirectory = $exportResult.ExportDirectory
+            $runtimeTelemetry.OutputArtifactSummary.ReportPath = $reportResult.ReportPath
+            $runtimeTelemetry.OutputArtifactSummary.ArtifactCount = Get-InspectorObjectInsightProperty -InputObject $exportResult -Name 'ArtifactCount'
+            $runtimeTelemetry.OutputArtifactSummary.TotalArtifactSizeBytes = $totalArtifactSizeBytes
+            $runtimeTelemetry.OutputArtifactSummary.HtmlReportSizeBytes = $reportResult.ReportSizeBytes
+            $runtimeTelemetry.OutputArtifactSummary |
+                Add-Member -NotePropertyName 'DiagnosticsReportPath' -NotePropertyValue $diagnosticsReportPath -Force
+
+            $runtimeTelemetry.OutputArtifactSummary |
+                Add-Member -NotePropertyName 'EvidenceReportPath' -NotePropertyValue $evidenceReportPath -Force
+
+            $runtimeTelemetry.OutputArtifactSummary |
+                Add-Member -NotePropertyName 'DiagnosticsLogPath' -NotePropertyValue $runLog.DiagnosticsLogPath -Force
+        }
+
+        if ($null -ne $orchestrationTelemetry.OutputArtifactSummary) {
+            $orchestrationTelemetry.OutputArtifactSummary |
+                Add-Member -NotePropertyName 'ReportPath' -NotePropertyValue $reportResult.ReportPath -Force
+            $orchestrationTelemetry.OutputArtifactSummary |
+                Add-Member -NotePropertyName 'DiagnosticsReportPath' -NotePropertyValue $diagnosticsReportPath -Force
+            $orchestrationTelemetry.OutputArtifactSummary |
+                Add-Member -NotePropertyName 'EvidenceReportPath' -NotePropertyValue $evidenceReportPath -Force
+        }
+
+        $orchestrationTelemetry.TotalCommandDurationMs = $commandStopwatch.ElapsedMilliseconds
+        $finalStatus = $reportResult.Status
+
+        # Package validation fields are additive to the report-result contract.
+        # Use the module's safe property accessor so StrictMode does not break
+        # orchestration tests, older report DTOs, or callers that mock the
+        # pre-validation report shape. Production report results still supply
+        # the finalized values.
+        $packageValidationStatus =
+            [string](Get-InspectorObjectInsightProperty `
+                -InputObject $reportResult `
+                -Name 'PackageValidationStatus')
+
+        if ([string]::IsNullOrWhiteSpace($packageValidationStatus)) {
+            $packageValidationStatus = 'NotRun'
+        }
+
+        $releaseEligibleValue =
+            Get-InspectorObjectInsightProperty `
+                -InputObject $reportResult `
+                -Name 'ReleaseEligible'
+
+        $releaseEligible =
+            if ($null -eq $releaseEligibleValue) {
+                $false
+            }
+            else {
+                [System.Convert]::ToBoolean($releaseEligibleValue)
+            }
+
+        $packageValidationErrors = @(
+            Get-InspectorObjectInsightProperty `
+                -InputObject $reportResult `
+                -Name 'PackageValidationErrors'
+        )
+
+        $packageValidationWarnings = @(
+            Get-InspectorObjectInsightProperty `
+                -InputObject $reportResult `
+                -Name 'PackageValidationWarnings'
+        )
+
+        $reportFailedObjectCount =
+            Get-InspectorObjectInsightProperty -InputObject $reportResult -Name 'FailedObjectCount'
+        if ($null -ne $reportFailedObjectCount) {
+            $failedObjectCount = [int]$reportFailedObjectCount
+        }
+
+        foreach ($finalizedDto in @($exportResult, $reportResult)) {
+            if ($null -ne $finalizedDto) {
+                $finalizedDto | Add-Member -NotePropertyName RunId -NotePropertyValue $runLog.RunId -Force
+                $finalizedDto | Add-Member -NotePropertyName ReportId -NotePropertyValue $reportId -Force
+                $finalizedDto | Add-Member -NotePropertyName FailedObjectCount -NotePropertyValue $failedObjectCount -Force
+                $finalizedDto | Add-Member -NotePropertyName PackageValidationStatus -NotePropertyValue $packageValidationStatus -Force
+                $finalizedDto | Add-Member -NotePropertyName ReleaseEligible -NotePropertyValue $releaseEligible -Force
+            }
+        }
+
+        $result = [PSCustomObject][ordered]@{
+            PSTypeName                       = 'EntraObjectInspector.SecurityAssessmentResult'
+            SchemaVersion                    = '1.0.0'
+            Status                           = $reportResult.Status
+            AssessmentName                   = $AssessmentName
+            RunId                            = $runLog.RunId
+            ReportId                         = $reportId
+            FailedObjectCount                = $failedObjectCount
+            OutputDirectory                  = $OutputDirectory
+            ReportPath                       = $reportResult.ReportPath
+            DiagnosticsReportPath            = $diagnosticsReportPath
+            EvidenceReportPath               = $evidenceReportPath
+            ExportDirectory                  = $exportResult.ExportDirectory
+            ManifestPath                     = $exportResult.ManifestPath
+            TenantInspectionStatus           = $tenantResult.Status
+            ExportStatus                     = $exportResult.Status
+            ReportStatus                     = $reportResult.Status
+            DiagnosticsLogPath               = $runLog.DiagnosticsLogPath
+            RunSummaryPath                   = $runLog.RunSummaryPath
+            GraphSessionDisconnected         = $graphSessionDisconnected
+            GraphSessionDisconnectAttempted  = $graphSessionDisconnectAttempted
+            KeepGraphSession                 = [bool]$KeepGraphSession
+            ReportOpened                     = $reportOpened
+            GraphCallsIssued                 = $reportResult.GraphCallsIssued
+            IntelligenceAdded                = $reportResult.IntelligenceAdded
+            NewObservationsAdded             = $reportResult.NewObservationsAdded
+            RiskScoreProduced                = $reportResult.RiskScoreProduced
+            AttackPathsProduced              = $reportResult.AttackPathsProduced
+            ClientSideInteractivity          = $reportResult.ClientSideInteractivity
+            GroupedObservations              = $reportResult.GroupedObservations
+            CrossReferencesEnabled           = $reportResult.CrossReferencesEnabled
+            SelfContainedHtml                = $reportResult.SelfContainedHtml
+            Printable                        = $reportResult.Printable
+            PackageValidationStatus          = $packageValidationStatus
+            ReleaseEligible                  = $releaseEligible
+            PackageValidationErrors          = $packageValidationErrors
+            PackageValidationWarnings        = $packageValidationWarnings
+            RuntimeTelemetry                 = $runtimeTelemetry
+            OrchestrationTelemetry           = $orchestrationTelemetry
+            TotalDurationMs                  = Get-InspectorObjectInsightProperty -InputObject $runtimeTelemetry -Name 'TotalDurationMs'
+            TotalCommandDurationMs           = $orchestrationTelemetry.TotalCommandDurationMs
+            GraphRequestCount                = Get-InspectorObjectInsightProperty -InputObject $graphSummary -Name 'TotalRequests'
+            GraphRequestsAtSnapshotCompletion = Get-InspectorObjectInsightProperty -InputObject $tenantResult -Name 'GraphRequestsAtSnapshotCompletion'
+            GraphRequestsAtAssessmentCompletion = Get-InspectorObjectInsightProperty -InputObject $tenantResult -Name 'GraphRequestsAtAssessmentCompletion'
+            GraphCallsAfterSnapshot          = Get-InspectorObjectInsightProperty -InputObject $tenantResult -Name 'GraphCallsAfterSnapshot'
+            ThrottledRequests                = Get-InspectorObjectInsightProperty -InputObject $throttlingSummary -Name 'ThrottledRequests'
+            RetriedRequests                  = Get-InspectorObjectInsightProperty -InputObject $retrySummary -Name 'RetriedRequests'
+            ObjectsProcessed                 = Get-InspectorObjectInsightProperty -InputObject $throughputSummary -Name 'ObjectsProcessed'
+            ObjectsPerSecond                 = Get-InspectorObjectInsightProperty -InputObject $throughputSummary -Name 'ObjectsPerSecond'
+            PeakMemoryMB                     = Get-InspectorObjectInsightProperty -InputObject $memorySummary -Name 'PeakMemoryMB'
+            MemoryTelemetryAvailable         = Get-InspectorObjectInsightProperty -InputObject $memorySummary -Name 'MemoryTelemetryAvailable'
+            OutputArtifactCount              = Get-InspectorObjectInsightProperty -InputObject $exportResult -Name 'ArtifactCount'
+            TotalArtifactSizeBytes           = $totalArtifactSizeBytes
+            ExternalHostsContacted           = Get-InspectorObjectInsightProperty -InputObject $externalEndpointSummary -Name 'ObservedExternalHosts'
+            UnexpectedExternalHosts          = Get-InspectorObjectInsightProperty -InputObject $externalEndpointSummary -Name 'UnexpectedExternalHosts'
+            TenantResult                     = $null
+            AssessmentIntelligence           = $null
+            ExportResult                     = $null
+            ReportResult                     = $null
+        }
+
+        if ($PassThru) {
+            $result.TenantResult = $tenantResult
+            $result.AssessmentIntelligence = $intelligence
+            $result.ExportResult = $exportResult
+            $result.ReportResult = $reportResult
+        }
+
+    }
+    catch {
+        Set-InspectorAssessmentStageStatus -Name $stage -Status 'Failed'
+        Write-InspectorDiagnosticEvent -RunLog $runLog -Stage $stage -Level 'Error' -EventName 'AssessmentFailed' -Message "Assessment failed during stage '$stage'." -Exception $_
+        if ($null -ne $runLog -and -not [string]::IsNullOrWhiteSpace($runLog.DiagnosticsLogPath)) {
+            Write-Warning "Assessment failed. Diagnostics log: $($runLog.DiagnosticsLogPath)"
+        }
+        throw
+    }
+    finally {
+        $script:InspectorCurrentRunLog = $null
+        Write-InspectorAssessmentStage -Step 7 -Name 'Finalizing and disconnecting'
+        $disconnectSummary = [PSCustomObject][ordered]@{
+            Attempted        = $false
+            Disconnected     = $false
+            KeepGraphSession = [bool]$KeepGraphSession
+            SkipConnect      = [bool]$SkipConnect
+            Message          = 'Disconnect not attempted.'
+        }
+
+        if ($connectedByCommand -and -not $KeepGraphSession) {
+            $graphSessionDisconnectAttempted = $true
+            $disconnectSummary.Attempted = $true
+            try {
+                Disconnect-MgGraph -ErrorAction Stop | Out-Null
+                $graphSessionDisconnected = $true
+                $disconnectSummary.Disconnected = $true
+                $disconnectSummary.Message = 'Microsoft Graph session disconnected.'
+                Write-InspectorDiagnosticEvent -RunLog $runLog -Stage 'Finalize' -EventName 'GraphDisconnected' -Message $disconnectSummary.Message
+            }
+            catch {
+                $disconnectSummary.Message = "Graph disconnect failed: $($_.Exception.Message)"
+                Write-Warning $disconnectSummary.Message
+                Write-InspectorDiagnosticEvent -RunLog $runLog -Stage 'Finalize' -Level 'Warning' -EventName 'GraphDisconnectFailed' -Message 'Microsoft Graph disconnect failed.' -Exception $_
+            }
+        }
+        elseif ($KeepGraphSession) {
+            $disconnectSummary.Message = 'Graph session preserved by -KeepGraphSession.'
+        }
+        elseif ($SkipConnect) {
+            $disconnectSummary.Message = 'Graph disconnect skipped because -SkipConnect was used.'
+        }
+        elseif (-not $connectedByCommand) {
+            $disconnectSummary.Message = 'Graph disconnect skipped because authentication did not establish a command-owned session.'
+        }
+
+        # Authoritative lifecycle sentinel: finalization/disconnect is part of the
+        # assessment lifecycle. Re-sample the shared run-scoped Graph counter only
+        # after that stage has completed, while the outer telemetry context is still
+        # active. This prevents a future wrapped Graph request introduced during
+        # finalization from escaping the release-integrity invariant.
+        if ($null -ne $tenantResult -and $null -ne $runtimeTelemetry) {
+            $finalSnapshotCountRaw = Get-InspectorObjectInsightProperty -InputObject $tenantResult -Name 'GraphRequestsAtSnapshotCompletion'
+            $finalAssessmentCountRaw = Get-InspectorObjectInsightProperty -InputObject (Get-InspectorObjectInsightProperty -InputObject $runtimeTelemetry -Name 'GraphRequestSummary') -Name 'TotalRequests'
+            $isCurrentTenantInspectionResult = @($tenantResult.PSObject.TypeNames) -contains 'EntraObjectInspector.TenantInspectionResult'
+            $finalSnapshotCount = [long]0
+            $finalAssessmentCount = [long]0
+            $finalSnapshotCountValid =
+                if ($null -eq $finalSnapshotCountRaw -and -not $isCurrentTenantInspectionResult) {
+                    # Preserve compatibility with narrow orchestration mocks/legacy DTOs.
+                    # Production TenantInspectionResult objects must always carry the
+                    # authoritative snapshot-boundary counter.
+                    $true
+                }
+                else {
+                    $null -ne $finalSnapshotCountRaw -and [long]::TryParse([string]$finalSnapshotCountRaw, [ref]$finalSnapshotCount)
+                }
+            $finalAssessmentCountValid = $null -ne $finalAssessmentCountRaw -and [long]::TryParse([string]$finalAssessmentCountRaw, [ref]$finalAssessmentCount)
+            $finalGraphLifecycleValid = $finalSnapshotCountValid -and $finalAssessmentCountValid -and $finalAssessmentCount -ge $finalSnapshotCount
+            $finalGraphCallsAfterSnapshot = if ($finalGraphLifecycleValid) { $finalAssessmentCount - $finalSnapshotCount } else { -1 }
+
+            foreach ($telemetryTarget in @($tenantResult, $runtimeTelemetry)) {
+                if ($null -ne $telemetryTarget) {
+                    $telemetryTarget | Add-Member -NotePropertyName GraphRequestsAtSnapshotCompletion -NotePropertyValue $finalSnapshotCount -Force
+                    $telemetryTarget | Add-Member -NotePropertyName GraphRequestsAtAssessmentCompletion -NotePropertyValue $finalAssessmentCount -Force
+                    $telemetryTarget | Add-Member -NotePropertyName GraphCallsAfterSnapshot -NotePropertyValue $finalGraphCallsAfterSnapshot -Force
+                }
+            }
+            if ($null -ne (Get-InspectorObjectInsightProperty -InputObject $tenantResult -Name 'Summary')) {
+                $tenantResult.Summary | Add-Member -NotePropertyName GraphRequestsAtSnapshotCompletion -NotePropertyValue $finalSnapshotCount -Force
+                $tenantResult.Summary | Add-Member -NotePropertyName GraphRequestsAtAssessmentCompletion -NotePropertyValue $finalAssessmentCount -Force
+                $tenantResult.Summary | Add-Member -NotePropertyName GraphCallsAfterSnapshot -NotePropertyValue $finalGraphCallsAfterSnapshot -Force
+            }
+
+            $finalExportDirectory = [string](Get-InspectorObjectInsightProperty -InputObject $exportResult -Name 'ExportDirectory')
+            if (-not [string]::IsNullOrWhiteSpace($finalExportDirectory)) {
+                $finalManifestPath = Join-Path $finalExportDirectory 'assessment-manifest.json'
+                $finalSummaryPath = Join-Path $finalExportDirectory 'assessment-summary.json'
+                if ((Test-Path -LiteralPath $finalManifestPath -PathType Leaf) -and (Test-Path -LiteralPath $finalSummaryPath -PathType Leaf)) {
+                    $authoritativeManifest = Read-InspectorReportJsonFile -Path $finalManifestPath
+                    $authoritativeSummary = Read-InspectorReportJsonFile -Path $finalSummaryPath
+                    foreach ($packageObject in @($authoritativeManifest, $authoritativeSummary)) {
+                        $packageObject | Add-Member -NotePropertyName GraphRequestsAtSnapshotCompletion -NotePropertyValue $finalSnapshotCount -Force
+                        $packageObject | Add-Member -NotePropertyName GraphRequestsAtAssessmentCompletion -NotePropertyValue $finalAssessmentCount -Force
+                        $packageObject | Add-Member -NotePropertyName GraphCallsAfterSnapshot -NotePropertyValue $finalGraphCallsAfterSnapshot -Force
+                    }
+                    Write-InspectorJsonFile -Path $finalSummaryPath -Value $authoritativeSummary
+                    for ($pass = 0; $pass -lt 3; $pass++) {
+                        Update-InspectorExportArtifactSizes -Manifest $authoritativeManifest -BasePath $finalExportDirectory
+                        Write-InspectorJsonFile -Path $finalManifestPath -Value $authoritativeManifest
+                    }
+
+                    $authoritativeReportModel = Get-InspectorReportModelFromDirectory -ExportDirectory $finalExportDirectory -AssessmentName $AssessmentName -ClientName $ClientName -ConsultantName $ConsultantName
+                    Write-InspectorJsonFile -Path $finalSummaryPath -Value $authoritativeReportModel.Summary
+                    for ($pass = 0; $pass -lt 3; $pass++) {
+                        Update-InspectorExportArtifactSizes -Manifest $authoritativeReportModel.Manifest -BasePath $finalExportDirectory
+                        Write-InspectorJsonFile -Path $finalManifestPath -Value $authoritativeReportModel.Manifest
+                    }
+
+                    $packageValidationStatus = [string]$authoritativeReportModel.PackageValidationStatus
+                    $releaseEligible = [bool]$authoritativeReportModel.ReleaseEligible
+                    $packageValidationErrors = @($authoritativeReportModel.PackageValidationErrors)
+                    $packageValidationWarnings = @($authoritativeReportModel.PackageValidationWarnings)
+                }
+            }
+
+            if (-not $finalGraphLifecycleValid -or $finalGraphCallsAfterSnapshot -ne 0) {
+                $packageValidationStatus = 'Failed'
+                $releaseEligible = $false
+                $lifecycleError = [PSCustomObject][ordered]@{
+                    ErrorId           = 'PKG-GRAPH-LIFECYCLE-FINAL-001'
+                    Message           = $(if ($finalGraphLifecycleValid) { "Graph activity was measured after snapshot completion during the complete assessment lifecycle: $finalGraphCallsAfterSnapshot request(s)." } else { 'Final Graph lifecycle counters were missing, nonnumeric, negative, or inconsistent.' })
+                    AffectedInvariant = 'GraphRequestsAtAssessmentCompletion >= GraphRequestsAtSnapshotCompletion and GraphCallsAfterSnapshot == 0 through finalization'
+                }
+                if (@($packageValidationErrors | Where-Object { [string](Get-InspectorObjectInsightProperty -InputObject $_ -Name 'ErrorId') -eq $lifecycleError.ErrorId }).Count -eq 0) {
+                    $packageValidationErrors = @($packageValidationErrors) + @($lifecycleError)
+                }
+            }
+
+            if ($null -ne $reportResult) {
+                $reportResult | Add-Member -NotePropertyName PackageValidationStatus -NotePropertyValue $packageValidationStatus -Force
+                $reportResult | Add-Member -NotePropertyName ReleaseEligible -NotePropertyValue $releaseEligible -Force
+                $reportResult | Add-Member -NotePropertyName PackageValidationErrors -NotePropertyValue @($packageValidationErrors) -Force
+                $reportResult | Add-Member -NotePropertyName PackageValidationWarnings -NotePropertyValue @($packageValidationWarnings) -Force
+            }
+            if ($null -ne $exportResult) {
+                $exportResult | Add-Member -NotePropertyName PackageValidationStatus -NotePropertyValue $packageValidationStatus -Force
+                $exportResult | Add-Member -NotePropertyName ReleaseEligible -NotePropertyValue $releaseEligible -Force
+            }
+        }
+
+        if ($null -ne $runLog) {
+            Set-InspectorAssessmentStageStatus -Name 'Finalize' -Status 'Success'
+            if ($null -ne $orchestrationTelemetry) {
+                $orchestrationTelemetry.TotalCommandDurationMs = $commandStopwatch.ElapsedMilliseconds
+            }
+            Complete-InspectorRunLog `
+                -RunLog $runLog `
+                -Status $finalStatus `
+                -ReportPath $ReportPath `
+                -RuntimeTelemetry $runtimeTelemetry `
+                -OrchestrationTelemetry $orchestrationTelemetry `
+                -GraphDisconnect $disconnectSummary `
+                -ReportId $reportId `
+                -PackageValidationStatus $packageValidationStatus `
+                -ReleaseEligible $releaseEligible `
+                -FailedObjectCount $failedObjectCount |
+                Out-Null
+        }
+
+        # Terminal drift guard: the shared telemetry context remains active through
+        # run-log completion. Re-read the counter immediately before result finalization
+        # and telemetry teardown so a future wrapped request introduced anywhere in late
+        # finalization cannot occur after the package has been declared releasable.
+        if ($null -ne $tenantResult -and $null -ne $runtimeTelemetry) {
+            $terminalSnapshotCountRaw = Get-InspectorObjectInsightProperty -InputObject $tenantResult -Name 'GraphRequestsAtSnapshotCompletion'
+            $terminalAssessmentCountRaw = Get-InspectorObjectInsightProperty -InputObject (Get-InspectorObjectInsightProperty -InputObject $runtimeTelemetry -Name 'GraphRequestSummary') -Name 'TotalRequests'
+            $isCurrentTenantInspectionResult = @($tenantResult.PSObject.TypeNames) -contains 'EntraObjectInspector.TenantInspectionResult'
+            $terminalSnapshotCount = [long]0
+            $terminalAssessmentCount = [long]0
+            $terminalSnapshotCountValid =
+                if ($null -eq $terminalSnapshotCountRaw -and -not $isCurrentTenantInspectionResult) {
+                    $true
+                }
+                else {
+                    $null -ne $terminalSnapshotCountRaw -and [long]::TryParse([string]$terminalSnapshotCountRaw, [ref]$terminalSnapshotCount)
+                }
+            $terminalAssessmentCountValid = $null -ne $terminalAssessmentCountRaw -and [long]::TryParse([string]$terminalAssessmentCountRaw, [ref]$terminalAssessmentCount)
+            $terminalGraphLifecycleValid = $terminalSnapshotCountValid -and $terminalAssessmentCountValid -and $terminalAssessmentCount -ge $terminalSnapshotCount
+            $terminalGraphCallsAfterSnapshot = if ($terminalGraphLifecycleValid) { $terminalAssessmentCount - $terminalSnapshotCount } else { -1 }
+            $terminalDriftDetected =
+                -not $terminalGraphLifecycleValid -or
+                $terminalGraphCallsAfterSnapshot -ne 0 -or
+                $terminalAssessmentCount -ne $finalAssessmentCount
+
+            if ($terminalDriftDetected) {
+                foreach ($telemetryTarget in @($tenantResult, $runtimeTelemetry)) {
+                    if ($null -ne $telemetryTarget) {
+                        $telemetryTarget | Add-Member -NotePropertyName GraphRequestsAtSnapshotCompletion -NotePropertyValue $terminalSnapshotCount -Force
+                        $telemetryTarget | Add-Member -NotePropertyName GraphRequestsAtAssessmentCompletion -NotePropertyValue $terminalAssessmentCount -Force
+                        $telemetryTarget | Add-Member -NotePropertyName GraphCallsAfterSnapshot -NotePropertyValue $terminalGraphCallsAfterSnapshot -Force
+                    }
+                }
+                if ($null -ne (Get-InspectorObjectInsightProperty -InputObject $tenantResult -Name 'Summary')) {
+                    $tenantResult.Summary | Add-Member -NotePropertyName GraphRequestsAtSnapshotCompletion -NotePropertyValue $terminalSnapshotCount -Force
+                    $tenantResult.Summary | Add-Member -NotePropertyName GraphRequestsAtAssessmentCompletion -NotePropertyValue $terminalAssessmentCount -Force
+                    $tenantResult.Summary | Add-Member -NotePropertyName GraphCallsAfterSnapshot -NotePropertyValue $terminalGraphCallsAfterSnapshot -Force
+                }
+
+                $packageValidationStatus = 'Failed'
+                $releaseEligible = $false
+                $terminalLifecycleError = [PSCustomObject][ordered]@{
+                    ErrorId           = 'PKG-GRAPH-LIFECYCLE-FINAL-001'
+                    Message           = $(if ($terminalGraphLifecycleValid) { "Graph activity was measured after snapshot completion during terminal finalization: $terminalGraphCallsAfterSnapshot request(s)." } else { 'Terminal Graph lifecycle counters were missing, nonnumeric, negative, or inconsistent.' })
+                    AffectedInvariant = 'GraphRequestsAtAssessmentCompletion >= GraphRequestsAtSnapshotCompletion and GraphCallsAfterSnapshot == 0 through complete orchestration finalization'
+                }
+                if (@($packageValidationErrors | Where-Object { [string](Get-InspectorObjectInsightProperty -InputObject $_ -Name 'ErrorId') -eq $terminalLifecycleError.ErrorId }).Count -eq 0) {
+                    $packageValidationErrors = @($packageValidationErrors) + @($terminalLifecycleError)
+                }
+
+                $terminalExportDirectory = [string](Get-InspectorObjectInsightProperty -InputObject $exportResult -Name 'ExportDirectory')
+                if (-not [string]::IsNullOrWhiteSpace($terminalExportDirectory)) {
+                    $terminalManifestPath = Join-Path $terminalExportDirectory 'assessment-manifest.json'
+                    $terminalSummaryPath = Join-Path $terminalExportDirectory 'assessment-summary.json'
+                    if ((Test-Path -LiteralPath $terminalManifestPath -PathType Leaf) -and (Test-Path -LiteralPath $terminalSummaryPath -PathType Leaf)) {
+                        $terminalManifest = Read-InspectorReportJsonFile -Path $terminalManifestPath
+                        $terminalSummary = Read-InspectorReportJsonFile -Path $terminalSummaryPath
+                        foreach ($packageObject in @($terminalManifest, $terminalSummary)) {
+                            $packageObject | Add-Member -NotePropertyName GraphRequestsAtSnapshotCompletion -NotePropertyValue $terminalSnapshotCount -Force
+                            $packageObject | Add-Member -NotePropertyName GraphRequestsAtAssessmentCompletion -NotePropertyValue $terminalAssessmentCount -Force
+                            $packageObject | Add-Member -NotePropertyName GraphCallsAfterSnapshot -NotePropertyValue $terminalGraphCallsAfterSnapshot -Force
+                            $packageObject | Add-Member -NotePropertyName PackageValidationStatus -NotePropertyValue 'Failed' -Force
+                            $packageObject | Add-Member -NotePropertyName ReleaseEligible -NotePropertyValue $false -Force
+                            $packageObject | Add-Member -NotePropertyName ValidationErrors -NotePropertyValue @($packageValidationErrors) -Force
+
+                            $packageValidationEnvelope = Get-InspectorObjectInsightProperty -InputObject $packageObject -Name 'PackageValidation'
+                            if ($null -eq $packageValidationEnvelope) {
+                                $packageValidationEnvelope = [PSCustomObject][ordered]@{}
+                                $packageObject | Add-Member -NotePropertyName PackageValidation -NotePropertyValue $packageValidationEnvelope -Force
+                            }
+                            $packageValidationEnvelope | Add-Member -NotePropertyName PackageValidationStatus -NotePropertyValue 'Failed' -Force
+                            $packageValidationEnvelope | Add-Member -NotePropertyName ReleaseEligible -NotePropertyValue $false -Force
+                            $packageValidationEnvelope | Add-Member -NotePropertyName ValidationErrors -NotePropertyValue @($packageValidationErrors) -Force
+                        }
+                        Write-InspectorJsonFile -Path $terminalSummaryPath -Value $terminalSummary
+                        for ($pass = 0; $pass -lt 3; $pass++) {
+                            Update-InspectorExportArtifactSizes -Manifest $terminalManifest -BasePath $terminalExportDirectory
+                            Write-InspectorJsonFile -Path $terminalManifestPath -Value $terminalManifest
+                        }
+                    }
+                }
+
+                if ($null -ne $reportResult) {
+                    $reportResult | Add-Member -NotePropertyName PackageValidationStatus -NotePropertyValue $packageValidationStatus -Force
+                    $reportResult | Add-Member -NotePropertyName ReleaseEligible -NotePropertyValue $releaseEligible -Force
+                    $reportResult | Add-Member -NotePropertyName PackageValidationErrors -NotePropertyValue @($packageValidationErrors) -Force
+                }
+                if ($null -ne $exportResult) {
+                    $exportResult | Add-Member -NotePropertyName PackageValidationStatus -NotePropertyValue $packageValidationStatus -Force
+                    $exportResult | Add-Member -NotePropertyName ReleaseEligible -NotePropertyValue $releaseEligible -Force
+                }
+
+                if ($null -ne $runLog -and $runLog.DiagnosticLogEnabled -and -not [string]::IsNullOrWhiteSpace([string]$runLog.RunSummaryPath) -and (Test-Path -LiteralPath $runLog.RunSummaryPath -PathType Leaf)) {
+                    $terminalRunSummary = Get-Content -LiteralPath $runLog.RunSummaryPath -Raw | ConvertFrom-Json
+                    $terminalRunSummary | Add-Member -NotePropertyName PackageValidationStatus -NotePropertyValue $packageValidationStatus -Force
+                    $terminalRunSummary | Add-Member -NotePropertyName ReleaseEligible -NotePropertyValue $releaseEligible -Force
+                    $terminalRunSummary | Add-Member -NotePropertyName RuntimeTelemetry -NotePropertyValue $runtimeTelemetry -Force
+                    $terminalRunSummary | ConvertTo-Json -Depth 40 | Set-Content -LiteralPath $runLog.RunSummaryPath -Encoding UTF8 -Force
+                }
+            }
+        }
+
+        if ($null -ne $result) {
+            if ($null -ne $orchestrationTelemetry) {
+                $result.OrchestrationTelemetry = $orchestrationTelemetry
+                $result.TotalCommandDurationMs = $orchestrationTelemetry.TotalCommandDurationMs
+            }
+            $result.GraphSessionDisconnected = $graphSessionDisconnected
+            $result.GraphSessionDisconnectAttempted = $graphSessionDisconnectAttempted
+            $result.DiagnosticsLogPath = $runLog.DiagnosticsLogPath
+            $result.RunSummaryPath = $runLog.RunSummaryPath
+            $result.ReportOpened = $reportOpened
+            $result.PackageValidationStatus = $packageValidationStatus
+            $result.ReleaseEligible = $releaseEligible
+            $result.PackageValidationErrors = @($packageValidationErrors)
+            $result.PackageValidationWarnings = @($packageValidationWarnings)
+            if ($null -ne $tenantResult) {
+                $result.GraphRequestsAtSnapshotCompletion = Get-InspectorObjectInsightProperty -InputObject $tenantResult -Name 'GraphRequestsAtSnapshotCompletion'
+                $result.GraphRequestsAtAssessmentCompletion = Get-InspectorObjectInsightProperty -InputObject $tenantResult -Name 'GraphRequestsAtAssessmentCompletion'
+                $result.GraphCallsAfterSnapshot = Get-InspectorObjectInsightProperty -InputObject $tenantResult -Name 'GraphCallsAfterSnapshot'
+            }
+            $result.GraphRequestCount = Get-InspectorObjectInsightProperty -InputObject (Get-InspectorObjectInsightProperty -InputObject $runtimeTelemetry -Name 'GraphRequestSummary') -Name 'TotalRequests'
+        }
+
+        if ($hadPreviousRuntimeTelemetry) { $script:InspectorCurrentRuntimeTelemetry = $previousRuntimeTelemetry } else { Remove-Variable -Name 'InspectorCurrentRuntimeTelemetry' -Scope Script -ErrorAction SilentlyContinue }
+
+        if (-not $NoProgress -and (Test-InspectorAssessmentInteractiveConsole)) {
+            Write-Progress -Activity 'Entra Object Inspector assessment' -Completed
+        }
+    }
+
+    if ($null -ne $result) {
+        # Keep host-only presentation outside the structured pipeline contract.
+        try { Write-InspectorAssessmentCompletion -AssessmentResult $result } catch { }
+        return $result
+    }
+}

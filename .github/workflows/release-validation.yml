@@ -1,0 +1,125 @@
+name: Release validation
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate PowerShell 7.6
+        shell: pwsh
+        run: |
+          if ($PSVersionTable.PSVersion -lt [version]'7.6') {
+              throw "PowerShell 7.6 or later is required. Detected $($PSVersionTable.PSVersion)."
+          }
+
+      - name: Install module prerequisites
+        shell: pwsh
+        run: |
+          Install-Module Microsoft.Graph.Authentication -RequiredVersion 2.39.0 -Scope CurrentUser -Repository PSGallery -Force -AllowClobber
+          Install-Module Microsoft.PowerShell.SecretManagement -RequiredVersion 1.1.2 -Scope CurrentUser -Repository PSGallery -Force -AllowClobber
+          Install-Module Microsoft.PowerShell.SecretStore -RequiredVersion 1.0.6 -Scope CurrentUser -Repository PSGallery -Force -AllowClobber
+          Install-Module Pester -RequiredVersion 6.1.0 -Scope CurrentUser -Repository PSGallery -Force -AllowClobber
+
+      - name: Verify release dependency baseline
+        shell: pwsh
+        run: |
+          $expected = [ordered]@{
+              'Microsoft.Graph.Authentication' = [version]'2.39.0'
+              'Microsoft.PowerShell.SecretManagement' = [version]'1.1.2'
+              'Microsoft.PowerShell.SecretStore' = [version]'1.0.6'
+              'Pester' = [version]'6.1.0'
+          }
+          foreach ($name in $expected.Keys) {
+              $module = Get-Module -ListAvailable -Name $name |
+                  Where-Object Version -eq $expected[$name] |
+                  Select-Object -First 1
+              if (-not $module) {
+                  throw "Required release-validation version not found: $name $($expected[$name])."
+              }
+              Import-Module $name -RequiredVersion $expected[$name] -Force
+              $loaded = Get-Module -Name $name
+              if ($null -eq $loaded -or $loaded.Version -ne $expected[$name]) {
+                  throw "Release-validation version mismatch: $name expected $($expected[$name]), loaded $($loaded.Version)."
+              }
+          }
+
+      - name: Validate requirements
+        shell: pwsh
+        run: ./Scripts/Test-EntraObjectInspectorRequirements.ps1 -NonInteractive -SkipGalleryReachability
+
+      - name: Import module and verify public command surface
+        shell: pwsh
+        run: |
+          Import-Module Microsoft.Graph.Authentication -RequiredVersion 2.39.0 -Force
+          Import-Module Microsoft.PowerShell.SecretManagement -RequiredVersion 1.1.2 -Force
+          Import-Module Microsoft.PowerShell.SecretStore -RequiredVersion 1.0.6 -Force
+          Remove-Module EntraObjectInspector -Force -ErrorAction SilentlyContinue
+          Import-Module ./EntraObjectInspector.psd1 -Force
+          $commands = @(Get-Command -Module EntraObjectInspector -CommandType Function)
+          if ($commands.Count -ne 7) {
+              throw "Expected exactly 7 public commands, found $($commands.Count)."
+          }
+
+      - name: Run Pester
+        shell: pwsh
+        run: |
+          Import-Module Microsoft.Graph.Authentication -RequiredVersion 2.39.0 -Force
+          Import-Module Microsoft.PowerShell.SecretManagement -RequiredVersion 1.1.2 -Force
+          Import-Module Microsoft.PowerShell.SecretStore -RequiredVersion 1.0.6 -Force
+          Import-Module Pester -RequiredVersion 6.1.0 -Force
+          $result = Invoke-Pester -Path ./Tests -Output Detailed -PassThru
+          if ($result.FailedCount -gt 0) {
+              throw "Pester failed: $($result.FailedCount) failing test(s)."
+          }
+
+      - name: Verify source package excludes generated assessment output
+        shell: pwsh
+        run: |
+          $forbiddenDirectories = @(
+              'exports',
+              'reports',
+              'EntraObjectInspector-Exports',
+              'EntraObjectInspector-Reports',
+              'logs',
+              'TestResults',
+              'coverage',
+              '.entra-object-inspector',
+              '.vscode',
+              '.idea'
+          )
+          $presentDirectories = @(
+              $forbiddenDirectories |
+                  Where-Object { Test-Path -LiteralPath $_ -PathType Container }
+          )
+          $forbiddenFiles = @(
+              Get-ChildItem -LiteralPath . -File -Recurse |
+                  Where-Object {
+                      $_.FullName -notmatch '[\\/]\.git[\\/]' -and (
+                          $_.Extension -in @('.zip', '.log', '.tmp', '.bak', '.trx') -or
+                          $_.Name -like 'release-repro-inventory*.txt' -or
+                          $_.Name -like 'PowerShell_transcript*.txt' -or
+                          $_.Name -like 'Transcript*.txt' -or
+                          $_.Name -like '*.transcript.txt' -or
+                          $_.Name -like '*.local.json' -or
+                          $_.Name -like '*.secret.json' -or
+                          $_.Name -like '*.secrets.json' -or
+                          $_.Name -like '*.credential.json' -or
+                          $_.Name -eq 'config.local.json' -or
+                          $_.Name -eq 'local.settings.json'
+                      )
+                  } |
+                  ForEach-Object {
+                      [System.IO.Path]::GetRelativePath((Get-Location).Path, $_.FullName)
+                  }
+          )
+          if ($presentDirectories.Count -gt 0 -or $forbiddenFiles.Count -gt 0) {
+              $details = @($presentDirectories + $forbiddenFiles) -join ', '
+              throw "Generated/local artifacts must not be packaged as source release content: $details"
+          }

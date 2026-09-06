@@ -1,0 +1,39 @@
+exports/
+reports/
+EntraObjectInspector-Exports/
+EntraObjectInspector-Reports/
+*.zip
+*.log
+*.tmp
+*.bak
+*.swp
+*.swo
+*.old
+*.orig
+*.rej
+*.ps1xml
+PowerShell_transcript*.txt
+Transcript*.txt
+*.transcript.txt
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Local configuration and secrets
+.entra-object-inspector/
+*.local.json
+config.local.json
+*.secret.json
+*.secrets.json
+*.credential.json
+local.settings.json
+
+# Test and analysis output
+TestResults/
+coverage/
+*.trx
+
+# Local release-validation inventory
+release-repro-inventory*.txt
+logs/
