@@ -2,8 +2,6 @@
 
 Entra Object Inspector is a read-only PowerShell tool for assessing Microsoft Entra ID objects and relationships through Microsoft Graph. It inspects users, groups, applications, and service principals, preserves supporting evidence, generates assessment findings, and exports structured artifacts and self-contained HTML reports.
 
-**GitHub:** https://github.com/0xDarknightHacks
-
 ## Scope
 
 The tool supports:
