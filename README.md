@@ -178,6 +178,22 @@ The export package includes the assessment manifest, summary, observations, obje
 
 Generated outputs may contain sensitive tenant metadata. Store and share them accordingly.
 
+### Report search via URL parameters
+
+The main assessment report supports prefilling the finding search box through URL query parameters. `q` provides a free-text search query and `object` provides an object-oriented prefill; when both are present, `q` takes precedence. Search values are applied inline when the report loads and are never persisted — no local or session storage is used, so reloading the report without the parameters restores the unfiltered view.
+
+Examples (URL-encode special characters such as spaces and `@`):
+
+```text
+report.html?q=Directory.ReadWrite.All
+report.html?q=Policy.ReadWrite.ConditionalAccess
+report.html?q=Finance%20Automation%20App
+report.html?object=00000000-0000-0000-0000-000000000000
+report.html?object=user%40contoso.com
+```
+
+Missing, empty, or unsupported parameters are ignored, so the reports degrade gracefully to the default unfiltered view in any host that does not supply them.
+
 ## Security Model
 
 Entra Object Inspector is designed to remain read-only. Logical tenant operations use Microsoft Graph `GET` requests. Selected high-volume independent reads may use Microsoft Graph JSON batching; the outer `$batch` request uses `POST`, while its individual subrequests remain read-only `GET` operations.
