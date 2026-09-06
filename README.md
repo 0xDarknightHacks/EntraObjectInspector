@@ -123,7 +123,7 @@ The command performs authentication, snapshot collection, tenant inspection, ass
 
 ### CLI assessment
 
-![Entra Object Inspector CLI assessment](docs/images/cli-assessment.png)
+![Entra Object Inspector CLI assessment](docs/images/CLI-assessment.png)
 
 ### Assessment summary
 
