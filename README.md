@@ -163,7 +163,7 @@ Interactive completion output and report telemetry distinguish tenant-wide, targ
 
 ### CLI assessment
 
-![Entra Object Inspector CLI assessment](docs/images/CLI-assessment.png)
+![Entra Object Inspector CLI assessment](docs/images/cli-assessment.png)
 
 ### Assessment summary
 
