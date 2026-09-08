@@ -76,9 +76,9 @@ Describe 'Tenant snapshot collection' {
             $snapshot = New-InspectorTenantSnapshot -RuntimeTelemetry $telemetry
 
             $snapshot.PSObject.TypeNames[0] | Should -Be 'EntraObjectInspector.TenantSnapshot'
-            $snapshot.SchemaVersion | Should -Be '1.0.0'
+            $snapshot.SchemaVersion | Should -Be '1.1.0'
             $snapshot.CollectionMode | Should -Be 'GraphIngestionOnly'
-            $snapshot.PersistenceMode | Should -Be 'InMemoryTemporary'
+            $snapshot.PersistenceMode | Should -Be 'PortableCapable'
             $snapshot.GraphCallsAllowedAfterSnapshot | Should -BeFalse
             $snapshot.Collections.Applications.Count | Should -Be 1
             $snapshot.Collections.ServicePrincipals.Count | Should -Be 1
@@ -101,6 +101,7 @@ Describe 'Tenant snapshot collection' {
             $snapshot.AssessmentCoverage.ExpectedQueries | Should -Contain 'Applications'
             $snapshot.AssessmentCoverage.ExpectedQueries | Should -Contain 'ApplicationOwners:app-1'
             $snapshot.AssessmentCoverage.ExpectedQueries | Should -Contain 'ServicePrincipalOwners:sp-1'
+            $snapshot.AssessmentCoverage.ExpectedQueries | Should -Contain 'ServicePrincipalOwnedObjects:sp-1'
             $snapshot.AssessmentCoverage.ExpectedQueries | Should -Contain 'AppRoleAssignments:sp-1'
             $snapshot.AssessmentCoverage.ExpectedQueries | Should -Contain 'AppRoleAssignedTo:sp-1'
             $snapshot.AssessmentCoverage.ExpectedQueries | Should -Contain 'ServicePrincipalGroupMemberships:sp-1'
@@ -115,16 +116,135 @@ Describe 'Tenant snapshot collection' {
                 [string](Get-InspectorSnapshotProperty -InputObject @($Requests)[0] -Name 'Name') -eq 'ApplicationOwners:app-1'
             } -Times 1 -Exactly
             Should -Invoke Invoke-InspectorGraphBatchRequest -ParameterFilter {
-                @($Requests).Count -eq 4 -and
+                @($Requests).Count -eq 5 -and
                 @($Requests | ForEach-Object { [string](Get-InspectorSnapshotProperty -InputObject $_ -Name 'Name') }) -contains 'ServicePrincipalGroupMemberships:sp-1'
             } -Times 1 -Exactly
             Should -Invoke Invoke-InspectorGraphRequest -ParameterFilter { $Uri -like '*/servicePrincipals/sp-1/memberOf' } -Times 1 -Exactly
+            Should -Invoke Invoke-InspectorGraphRequest -ParameterFilter { $Uri -like '*/servicePrincipals/sp-1/ownedObjects*' } -Times 1 -Exactly
+        }
+
+        It 'merges direct user owners with service-principal group owners reconstructed from ownedObjects evidence' {
+            Mock Invoke-InspectorGraphRequest {
+                $items = switch -Wildcard ($Uri) {
+                    '*/servicePrincipals/sp-owner/ownedObjects*' {
+                        @(
+                            [PSCustomObject]@{ '@odata.type' = '#microsoft.graph.group'; id = 'group-target'; displayName = 'Target Group' }
+                        )
+                        break
+                    }
+                    '*/servicePrincipals/sp-owner/memberOf' { @(); break }
+                    '*/applications?*' { @() }
+                    '*/servicePrincipals?*' { @([PSCustomObject]@{ id = 'sp-owner'; appId = 'app-sp-owner'; displayName = 'Automation Owner SP'; servicePrincipalType = 'Application'; keyCredentials = @(); passwordCredentials = @(); appRoles = @() }) }
+                    '*/users?*' { @() }
+                    '*/organization?*' { @([PSCustomObject]@{ id = 'tenant-1'; displayName = 'Tenant One'; verifiedDomains = @() }) }
+                    '*/groups/group-target/owners?*' { @([PSCustomObject]@{ '@odata.type' = '#microsoft.graph.user'; id = 'user-owner'; displayName = 'User Owner' }); break }
+                    '*/groups?*' { @([PSCustomObject]@{ id = 'group-target'; displayName = 'Target Group'; visibility = 'Private'; securityEnabled = $true; mailEnabled = $false }) }
+                    default { @() }
+                }
+
+                $mockResult = [PSCustomObject]@{
+                    SourceEndpoint = $Uri
+                    RequiredPermission = $RequiredPermission
+                    CollectionTime = (Get-Date).ToUniversalTime().ToString('o')
+                    Status = 'Success'
+                    ObservedValue = $items
+                    Limitations = @()
+                }
+                Add-InspectorGraphTelemetryRecord -Telemetry $RuntimeTelemetry -GraphResult $mockResult
+                $mockResult
+            }
+
+            $snapshot = New-InspectorTenantSnapshot -RuntimeTelemetry (New-InspectorRuntimeTelemetry)
+            $ownerRows = @($snapshot.Collections.GroupOwners | Where-Object { $_.SourceObjectId -eq 'group-target' } | Sort-Object { $_.Owner.id })
+
+            $ownerRows.Count | Should -Be 2
+            @($ownerRows.Owner.id) | Should -Be @('sp-owner','user-owner')
+            ($ownerRows | Where-Object { $_.Owner.id -eq 'sp-owner' }).EvidenceId | Should -Be (
+                @($snapshot.Evidence | Where-Object QueryName -eq 'ServicePrincipalOwnedObjects:sp-owner')[0].EvidenceId
+            )
+            @($snapshot.Collections.GroupOwners | Where-Object { $_.Owner.id -eq 'sp-owner' }).Count | Should -Be 1
+            $snapshot.CollectionSummary.GroupOwners.Status | Should -Be 'Success'
+            $snapshot.CollectionSummary.GroupOwners.Completeness | Should -Be 'Complete'
+        }
+
+        It 'fails closed for group-owner completeness when service-principal ownedObjects evidence is unavailable' {
+            Mock Invoke-InspectorGraphRequest {
+                $items = switch -Wildcard ($Uri) {
+                    '*/servicePrincipals?*' { @([PSCustomObject]@{ id = 'sp-1'; appId = 'app-sp-1'; displayName = 'SP'; keyCredentials = @(); passwordCredentials = @(); appRoles = @() }) }
+                    '*/groups?*' { @([PSCustomObject]@{ id = 'group-1'; displayName = 'Group One'; visibility = 'Private'; securityEnabled = $true; mailEnabled = $false }) }
+                    '*/organization?*' { @([PSCustomObject]@{ id = 'tenant-1'; displayName = 'Tenant One'; verifiedDomains = @() }) }
+                    default { @() }
+                }
+
+                $status = if ($Uri -like '*/servicePrincipals/sp-1/ownedObjects*') { 'InsufficientPermission' } else { 'Success' }
+                [PSCustomObject]@{
+                    SourceEndpoint = $Uri
+                    RequiredPermission = $RequiredPermission
+                    CollectionTime = (Get-Date).ToUniversalTime().ToString('o')
+                    Status = $status
+                    ObservedValue = $items
+                    Limitations = if ($status -eq 'Success') { @() } else { @('ownedObjects denied') }
+                }
+            }
+
+            $snapshot = New-InspectorTenantSnapshot -ObjectType ServicePrincipal,Group -RuntimeTelemetry (New-InspectorRuntimeTelemetry)
+            $ownerEvidence = @($snapshot.Evidence | Where-Object QueryName -eq 'GroupOwners:group-1')
+
+            $ownerEvidence.Count | Should -Be 1
+            $ownerEvidence[0].Status | Should -Be 'Partial'
+            $ownerEvidence[0].Completeness | Should -Be 'Partial'
+            @($ownerEvidence[0].Limitations) -join ' ' | Should -Match 'ownedObjects corpus'
+            $snapshot.CollectionSummary.GroupOwners.Completeness | Should -Be 'Partial'
+            $snapshot.AssessmentCoverage.Completeness | Should -Be 'Partial'
+        }
+
+        It 'fails closed for mail-enabled security-group owner completeness' {
+            Mock Invoke-InspectorGraphRequest {
+                $items = switch -Wildcard ($Uri) {
+                    '*/servicePrincipals?*' { @() }
+                    '*/groups?*' {
+                        @([PSCustomObject]@{
+                            id = 'mail-security-group-1'
+                            displayName = 'Mail Security Group'
+                            visibility = 'Private'
+                            securityEnabled = $true
+                            mailEnabled = $true
+                            groupTypes = @()
+                            onPremisesSyncEnabled = $false
+                        })
+                    }
+                    '*/organization?*' { @([PSCustomObject]@{ id = 'tenant-1'; displayName = 'Tenant One'; verifiedDomains = @() }) }
+                    default { @() }
+                }
+
+                $mockResult = [PSCustomObject]@{
+                    SourceEndpoint = $Uri
+                    RequiredPermission = $RequiredPermission
+                    CollectionTime = (Get-Date).ToUniversalTime().ToString('o')
+                    Status = 'Success'
+                    ObservedValue = $items
+                    Limitations = @()
+                }
+                Add-InspectorGraphTelemetryRecord -Telemetry $RuntimeTelemetry -GraphResult $mockResult
+                $mockResult
+            }
+
+            $snapshot = New-InspectorTenantSnapshot -ObjectType ServicePrincipal,Group -RuntimeTelemetry (New-InspectorRuntimeTelemetry)
+            $ownerEvidence = @($snapshot.Evidence | Where-Object QueryName -eq 'GroupOwners:mail-security-group-1')
+
+            $ownerEvidence.Count | Should -Be 1
+            $ownerEvidence[0].Status | Should -Be 'Partial'
+            $ownerEvidence[0].Completeness | Should -Be 'Partial'
+            @($ownerEvidence[0].Limitations) -join ' ' | Should -Match 'mail-enabled security group'
+            $snapshot.CollectionSummary.GroupOwners.Completeness | Should -Be 'Partial'
+            $snapshot.AssessmentCoverage.Completeness | Should -Be 'Partial'
         }
 
         It 'reconstructs direct service-principal group members through stable v1.0 reverse membership evidence' {
             Mock Invoke-InspectorGraphRequest {
                 $items = switch -Wildcard ($Uri) {
-                    '*/servicePrincipals/sp-member/memberOf' { @([PSCustomObject]@{ '@odata.type' = '#microsoft.graph.group'; id = 'group-target'; displayName = 'Target Group' }) }
+                    '*/servicePrincipals/sp-member/memberOf' { @([PSCustomObject]@{ '@odata.type' = '#microsoft.graph.group'; id = 'group-target'; displayName = 'Target Group' }); break }
+                    '*/servicePrincipals/sp-member/ownedObjects*' { @(); break }
                     '*/applications?*' { @() }
                     '*/servicePrincipals?*' { @([PSCustomObject]@{ id = 'sp-member'; appId = 'app-sp-member'; displayName = 'Automation SP'; servicePrincipalType = 'Application'; keyCredentials = @(); passwordCredentials = @(); appRoles = @() }) }
                     '*/users?*' { @() }

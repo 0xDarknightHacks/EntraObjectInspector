@@ -140,6 +140,7 @@ function Export-EntraTenantInspection {
         $recommendationsJsonPath = Join-Path $targetDirectory 'assessment-recommendations.json'
         $correlationsJsonPath = Join-Path $targetDirectory 'assessment-correlations.json'
         $limitationsJsonPath = Join-Path $targetDirectory 'assessment-limitations.json'
+        $changesJsonPath = Join-Path $targetDirectory 'snapshot-changes.json'
 
         $jsonWriteStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 
@@ -184,6 +185,11 @@ function Export-EntraTenantInspection {
         Write-InspectorJsonFile -Path $limitationsJsonPath -Value $exportModel.AssessmentLimitationRows
         $artifactRecords.Add((New-InspectorExportArtifactRecord -Name 'assessment-limitations.json' -Kind 'json' -Path $limitationsJsonPath -RecordCount @($exportModel.AssessmentLimitationRows).Count))
 
+        if ($null -ne $exportModel.SnapshotComparison) {
+            Write-InspectorJsonFile -Path $changesJsonPath -Value $exportModel.SnapshotChanges -Depth 40
+            $artifactRecords.Add((New-InspectorExportArtifactRecord -Name 'snapshot-changes.json' -Kind 'json' -Path $changesJsonPath -RecordCount @($exportModel.SnapshotChanges).Count))
+        }
+
         $jsonWriteStopwatch.Stop()
         $jsonWriteElapsedMs = $jsonWriteStopwatch.ElapsedMilliseconds
         $workingSetAfterJsonMB = Get-InspectorExportWorkingSetMB
@@ -202,8 +208,9 @@ function Export-EntraTenantInspection {
             $recommendationsCsvPath = Join-Path $targetDirectory 'assessment-recommendations.csv'
             $correlationsCsvPath = Join-Path $targetDirectory 'assessment-correlations.csv'
             $limitationsCsvPath = Join-Path $targetDirectory 'assessment-limitations.csv'
+            $changesCsvPath = Join-Path $targetDirectory 'snapshot-changes.csv'
 
-            Write-InspectorCsvFile -Path $observationsCsvPath -Rows $exportModel.SecurityObservationRows -Header @('ObservationId','Category','Severity','Confidence','Title','Description','AffectedObjectType','AffectedObjectId','AffectedDisplayName','EvidenceIds','MicrosoftReference','WhyItMatters','Limitations','Recommendation','SourceRuleIds','Metadata')
+            Write-InspectorCsvFile -Path $observationsCsvPath -Rows $exportModel.SecurityObservationRows -Header @('ObservationId','Category','Severity','Confidence','BaselineState','Title','Description','AffectedObjectType','AffectedObjectId','AffectedDisplayName','EvidenceIds','MicrosoftReference','WhyItMatters','Limitations','Recommendation','SourceRuleIds','Metadata')
             $artifactRecords.Add((New-InspectorExportArtifactRecord -Name 'security-observations.csv' -Kind 'csv' -Path $observationsCsvPath -RecordCount @($exportModel.SecurityObservationRows).Count))
 
             Write-InspectorCsvFile -Path $objectIndexCsvPath -Rows $exportModel.ObjectIndexRows -Header @('Input','Status','ResolutionType','DiscoveryObjectType','DiscoveryObjectId','DisplayName','RelationshipStatus','RelationshipCompleteness','SourceObjectCount','RelationshipCount','ArtifactCount','EvidenceCount','DirectEvidenceCount','EvidenceSampleIds','EvidenceTruncated','EvidenceMappingStatus','EvidenceMappingLimitation','RuleResultCount','PermissionInsightCount','SecurityObservationCount','FindingEligibleObservationCount','FindingCount','Limitations')
@@ -218,7 +225,7 @@ function Export-EntraTenantInspection {
             Write-InspectorCsvFile -Path $logsCsvPath -Rows $exportModel.LogRows -Header @('Timestamp','Stage','Level','Message','Data')
             $artifactRecords.Add((New-InspectorExportArtifactRecord -Name 'execution-log.csv' -Kind 'csv' -Path $logsCsvPath -RecordCount @($exportModel.LogRows).Count))
 
-            Write-InspectorCsvFile -Path $findingsCsvPath -Rows $exportModel.AssessmentFindingRows -Header @('FindingId','Category','Severity','Confidence','ResultState','EvidenceLinkStatus','EvidenceSupportStatus','ContributingObservationCount','DirectEvidenceObservationCount','DerivedEvidenceObservationCount','UnsupportedObservationCount','UniqueEvidenceCount','DirectEvidenceCoveragePercent','Title','Conclusion','CriterionSummary','SeverityReason','ObservationCount','AffectedObjectCount','ObservationIds','EvidenceIds','MicrosoftReference','Recommendation','RecommendationNotApplicable','Limitations','AffectedObjects','IssueGroups','Metadata')
+            Write-InspectorCsvFile -Path $findingsCsvPath -Rows $exportModel.AssessmentFindingRows -Header @('FindingId','Category','Severity','Confidence','ResultState','EvidenceLinkStatus','EvidenceSupportStatus','ContributingObservationCount','DirectEvidenceObservationCount','DerivedEvidenceObservationCount','UnsupportedObservationCount','UniqueEvidenceCount','DirectEvidenceCoveragePercent','Title','Conclusion','WhatHappened','WhyItMatters','RecommendedAction','BaselineState','EvidenceProof','CriterionSummary','SeverityReason','ObservationCount','AffectedObjectCount','ObservationIds','EvidenceIds','MicrosoftReference','Recommendation','RecommendationNotApplicable','Limitations','AffectedObjects','IssueGroups','Metadata')
             $artifactRecords.Add((New-InspectorExportArtifactRecord -Name 'assessment-findings.csv' -Kind 'csv' -Path $findingsCsvPath -RecordCount @($exportModel.AssessmentFindingRows).Count))
 
             Write-InspectorCsvFile -Path $recommendationsCsvPath -Rows $exportModel.AssessmentRecommendationRows -Header @('RecommendationId','Category','Confidence','Title','Action','Rationale','MicrosoftReference','ObservationIds','EvidenceIds','Limitations')
@@ -229,6 +236,11 @@ function Export-EntraTenantInspection {
 
             Write-InspectorCsvFile -Path $limitationsCsvPath -Rows $exportModel.AssessmentLimitationRows -Header @('Limitation')
             $artifactRecords.Add((New-InspectorExportArtifactRecord -Name 'assessment-limitations.csv' -Kind 'csv' -Path $limitationsCsvPath -RecordCount @($exportModel.AssessmentLimitationRows).Count))
+
+            if ($null -ne $exportModel.SnapshotComparison) {
+                Write-InspectorCsvFile -Path $changesCsvPath -Rows $exportModel.SnapshotChangeRows -Header @('ChangeId','ChangeType','Category','SemanticKey','SubjectObjectType','SubjectObjectId','RelatedObjectId','BaselineState','PreviousEvidenceIds','CurrentEvidenceIds','PreviousValue','CurrentValue')
+                $artifactRecords.Add((New-InspectorExportArtifactRecord -Name 'snapshot-changes.csv' -Kind 'csv' -Path $changesCsvPath -RecordCount @($exportModel.SnapshotChangeRows).Count))
+            }
 
             $csvWriteStopwatch.Stop()
             $csvWriteElapsedMs = $csvWriteStopwatch.ElapsedMilliseconds

@@ -111,6 +111,12 @@ Describe 'Security Observation Engine' {
             }
         }
 
+
+        It 'preserves deterministic observation IDs after hash-path optimization' {
+            New-InspectorObservationId -Seed 'maturity-hash-compatibility' |
+                Should -Be 'OBS-D3F9A73314DF2D07'
+        }
+
         It 'returns the required observation engine envelope without Graph calls' {
             $insight = New-TestObjectInsight
 

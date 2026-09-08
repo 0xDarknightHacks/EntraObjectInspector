@@ -41,6 +41,39 @@ function Invoke-InspectorObservationEngine {
             -ObjectInsight $ObjectInsight
     )
 
+    $sourceObjectsByTypeId = @{}
+    $sourceObjectsByType = @{}
+    foreach ($sourceObject in @($sourceObjects)) {
+        $sourceType = [string](Get-InspectorObservationProperty -InputObject $sourceObject -Name 'ObjectType')
+        $sourceId = [string](Get-InspectorObservationProperty -InputObject $sourceObject -Name 'ObjectId')
+        if ([string]::IsNullOrWhiteSpace($sourceType)) { continue }
+        if (-not $sourceObjectsByType.ContainsKey($sourceType)) {
+            $sourceObjectsByType[$sourceType] = [System.Collections.Generic.List[object]]::new()
+        }
+        $sourceObjectsByType[$sourceType].Add($sourceObject)
+        if (-not [string]::IsNullOrWhiteSpace($sourceId)) {
+            $sourceObjectsByTypeId["$sourceType|$sourceId"] = $sourceObject
+        }
+    }
+
+    function Find-InspectorObservationSourceObject {
+        param (
+            [string]$ObjectType = '',
+            [string]$ObjectId = ''
+        )
+
+        if (-not [string]::IsNullOrWhiteSpace($ObjectType) -and -not [string]::IsNullOrWhiteSpace($ObjectId)) {
+            $key = "$ObjectType|$ObjectId"
+            if ($sourceObjectsByTypeId.ContainsKey($key)) { return $sourceObjectsByTypeId[$key] }
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($ObjectType) -and $sourceObjectsByType.ContainsKey($ObjectType)) {
+            return @($sourceObjectsByType[$ObjectType] | Select-Object -First 1)[0]
+        }
+
+        return $null
+    }
+
     $relationships = @(
         Get-InspectorObservationRelationships `
             -ObjectInsight $ObjectInsight
@@ -300,8 +333,7 @@ function Invoke-InspectorObservationEngine {
         }
 
         $credentialSourceObject =
-            Get-InspectorObservationSourceObject `
-                -SourceObjects $sourceObjects `
+            Find-InspectorObservationSourceObject `
                 -ObjectType $sourceObjectType `
                 -ObjectId $sourceObjectId
         $affectedObject =
@@ -447,7 +479,7 @@ function Invoke-InspectorObservationEngine {
                     -Description "Object '$($group.Name)' has multiple active password credentials." `
                     -Severity 'Medium' `
                     -Confidence 'High' `
-                    -AffectedObject (New-InspectorAffectedObjectFromSourceObject -SourceObject (Get-InspectorObservationSourceObject -SourceObjects $sourceObjects -ObjectType $firstCredentialSourceType -ObjectId ([string]$group.Name)) -FallbackObjectType $firstCredentialSourceType -FallbackObjectId ([string]$group.Name) -FallbackDisplayName ([string]$group.Name)) `
+                    -AffectedObject (New-InspectorAffectedObjectFromSourceObject -SourceObject (Find-InspectorObservationSourceObject -ObjectType $firstCredentialSourceType -ObjectId ([string]$group.Name)) -FallbackObjectType $firstCredentialSourceType -FallbackObjectId ([string]$group.Name) -FallbackDisplayName ([string]$group.Name)) `
                     -EvidenceIds (Get-InspectorObservationEvidenceIds -Items $activeSecrets) `
                     -MicrosoftReference $credentialReference `
                     -WhyItMatters 'Multiple active secrets increase credential inventory complexity and the number of secrets that must be protected.' `
@@ -517,7 +549,7 @@ function Invoke-InspectorObservationEngine {
                     -Description "Object '$($group.Name)' has credentials with overlapping validity windows." `
                     -Severity 'Low' `
                     -Confidence 'Medium' `
-                    -AffectedObject (New-InspectorAffectedObjectFromSourceObject -SourceObject (Get-InspectorObservationSourceObject -SourceObjects $sourceObjects -ObjectType $firstCredentialSourceType -ObjectId ([string]$group.Name)) -FallbackObjectType $firstCredentialSourceType -FallbackObjectId ([string]$group.Name) -FallbackDisplayName ([string]$group.Name)) `
+                    -AffectedObject (New-InspectorAffectedObjectFromSourceObject -SourceObject (Find-InspectorObservationSourceObject -ObjectType $firstCredentialSourceType -ObjectId ([string]$group.Name)) -FallbackObjectType $firstCredentialSourceType -FallbackObjectId ([string]$group.Name) -FallbackDisplayName ([string]$group.Name)) `
                     -EvidenceIds (Get-InspectorObservationEvidenceIds -Items $sourceCredentials) `
                     -MicrosoftReference $credentialReference `
                     -WhyItMatters 'Overlapping credentials may be intentional for rotation, but they should be reviewed to avoid unnecessary active credentials.' `
@@ -567,7 +599,7 @@ function Invoke-InspectorObservationEngine {
                     -Description "The object has Microsoft Graph application permission '$permissionName'." `
                     -Severity 'High' `
                     -Confidence $permissionInsight.Confidence `
-                    -AffectedObject (New-InspectorAffectedObjectFromSourceObject -SourceObject (Get-InspectorObservationSourceObject -SourceObjects $sourceObjects -ObjectType 'ServicePrincipal' -ObjectId ([string]$permissionInsight.SourceObjectId)) -FallbackObjectType 'ServicePrincipal' -FallbackObjectId ([string]$permissionInsight.SourceObjectId) -FallbackDisplayName ([string]$permissionInsight.SourceObjectId)) `
+                    -AffectedObject (New-InspectorAffectedObjectFromSourceObject -SourceObject (Find-InspectorObservationSourceObject -ObjectType 'ServicePrincipal' -ObjectId ([string]$permissionInsight.SourceObjectId)) -FallbackObjectType 'ServicePrincipal' -FallbackObjectId ([string]$permissionInsight.SourceObjectId) -FallbackDisplayName ([string]$permissionInsight.SourceObjectId)) `
                     -EvidenceIds @($permissionInsight.RelationshipEvidenceId) `
                     -MicrosoftReference $permissionReference `
                     -WhyItMatters $permissionInsight.AdministrativeImpact `
@@ -705,7 +737,7 @@ function Invoke-InspectorObservationEngine {
             [string]::IsNullOrWhiteSpace($servicePrincipalObjectId) -and
             $counterpartCollectionEvidenceSucceeded
         ) {
-            $applicationSourceObject = Get-InspectorObservationSourceObject -SourceObjects $sourceObjects -ObjectType 'Application' -ObjectId $applicationObjectId
+            $applicationSourceObject = Find-InspectorObservationSourceObject -ObjectType 'Application' -ObjectId $applicationObjectId
             $observations.Add(
                 (New-InspectorSecurityObservation `
                     -Category 'ServicePrincipal' `
@@ -728,7 +760,7 @@ function Invoke-InspectorObservationEngine {
             -not [string]::IsNullOrWhiteSpace($servicePrincipalObjectId) -and
             $counterpartCollectionEvidenceSucceeded
         ) {
-            $servicePrincipalSourceObject = Get-InspectorObservationSourceObject -SourceObjects $sourceObjects -ObjectType 'ServicePrincipal' -ObjectId $servicePrincipalObjectId
+            $servicePrincipalSourceObject = Find-InspectorObservationSourceObject -ObjectType 'ServicePrincipal' -ObjectId $servicePrincipalObjectId
             $servicePrincipalMetadata = Get-InspectorObservationProperty -InputObject $servicePrincipalSourceObject -Name 'Metadata'
             $counterpartPublisher = [string](Get-InspectorObservationProperty -InputObject $servicePrincipalMetadata -Name 'PublisherClassification')
             $counterpartOwnership = [string](Get-InspectorObservationProperty -InputObject $servicePrincipalMetadata -Name 'TenantOwnershipClassification')
@@ -765,7 +797,7 @@ function Invoke-InspectorObservationEngine {
                 -Description 'The application object and its service principal have different owner sets.' `
                 -Severity 'Low' `
                 -Confidence 'High' `
-                -AffectedObject (New-InspectorAffectedObjectFromSourceObject -SourceObject (Get-InspectorObservationSourceObject -SourceObjects $sourceObjects -ObjectType $ownershipMismatchObjectType -ObjectId $ownershipMismatchObjectId) -FallbackObjectType $ownershipMismatchObjectType -FallbackObjectId $ownershipMismatchObjectId -FallbackDisplayName ([string]$applicationIdentity.AppId)) `
+                -AffectedObject (New-InspectorAffectedObjectFromSourceObject -SourceObject (Find-InspectorObservationSourceObject -ObjectType $ownershipMismatchObjectType -ObjectId $ownershipMismatchObjectId) -FallbackObjectType $ownershipMismatchObjectType -FallbackObjectId $ownershipMismatchObjectId -FallbackDisplayName ([string]$applicationIdentity.AppId)) `
                 -EvidenceIds @($rule.EvidenceIds) `
                 -MicrosoftReference 'Microsoft Entra separates application objects from service principals; each has its own owners relationship.' `
                 -WhyItMatters 'Different ownership can be legitimate, but it should be explainable because app registration and enterprise-app governance may be handled by different people.' `
@@ -788,7 +820,7 @@ function Invoke-InspectorObservationEngine {
                     -Name 'ConsentType')
 
             $grantEvidenceId = [string](Get-InspectorObservationProperty -InputObject $grant -Name 'EvidenceId')
-            $grantSourceObject = Get-InspectorObservationSourceObject -SourceObjects $sourceObjects -ObjectType 'ServicePrincipal' -ObjectId ([string]$grant.SourceObjectId)
+            $grantSourceObject = Find-InspectorObservationSourceObject -ObjectType 'ServicePrincipal' -ObjectId ([string]$grant.SourceObjectId)
 
             if ($consentType -eq 'AllPrincipals') {
                 $observations.Add(
@@ -844,7 +876,7 @@ function Invoke-InspectorObservationEngine {
             }
         }
 
-        $consentSummarySource = Get-InspectorObservationSourceObject -SourceObjects $sourceObjects -ObjectType 'ServicePrincipal'
+        $consentSummarySource = Find-InspectorObservationSourceObject -ObjectType 'ServicePrincipal'
         $observations.Add(
             (New-InspectorSecurityObservation `
                 -Category 'Consent' `
@@ -865,9 +897,9 @@ function Invoke-InspectorObservationEngine {
     }
 
     if ($permissionInsights.Count -gt 0) {
-        $permissionSummarySource = Get-InspectorObservationSourceObject -SourceObjects $sourceObjects -ObjectType 'ServicePrincipal'
+        $permissionSummarySource = Find-InspectorObservationSourceObject -ObjectType 'ServicePrincipal'
         if ($null -eq $permissionSummarySource) {
-            $permissionSummarySource = Get-InspectorObservationSourceObject -SourceObjects $sourceObjects -ObjectType 'Application'
+            $permissionSummarySource = Find-InspectorObservationSourceObject -ObjectType 'Application'
         }
         $observations.Add(
             (New-InspectorSecurityObservation `

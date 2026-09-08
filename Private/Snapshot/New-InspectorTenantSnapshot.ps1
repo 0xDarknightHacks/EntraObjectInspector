@@ -6,6 +6,8 @@ function New-InspectorTenantSnapshot {
 
         [int]$MaxObjectsPerType = 0,
 
+        [object[]]$TargetSpecification = @(),
+
         [AllowNull()]
         [object]$RuntimeTelemetry
     )
@@ -22,7 +24,7 @@ function New-InspectorTenantSnapshot {
         Applications = @{ ObjectType = 'Application'; Uri = "$graphBaseUri/applications?`$select=id,appId,displayName,signInAudience,publisherDomain,verifiedPublisher,appRoles,requiredResourceAccess,keyCredentials,passwordCredentials&`$top=999"; Permission = 'Application.Read.All' }
         ServicePrincipals = @{ ObjectType = 'ServicePrincipal'; Uri = "$graphBaseUri/servicePrincipals?`$select=id,appId,displayName,servicePrincipalType,accountEnabled,appRoleAssignmentRequired,tags,appRoles,appOwnerOrganizationId,publisherName,verifiedPublisher,keyCredentials,passwordCredentials&`$top=999"; Permission = 'Application.Read.All' }
         Users = @{ ObjectType = 'User'; Uri = "$graphBaseUri/users?`$select=id,userPrincipalName,displayName,userType,accountEnabled&`$top=999"; Permission = 'User.Read.All' }
-        Groups = @{ ObjectType = 'Group'; Uri = "$graphBaseUri/groups?`$select=id,displayName,securityEnabled,mailEnabled,groupTypes,isAssignableToRole,visibility,membershipRule,membershipRuleProcessingState&`$top=999"; Permission = 'GroupMember.Read.All' }
+        Groups = @{ ObjectType = 'Group'; Uri = "$graphBaseUri/groups?`$select=id,displayName,securityEnabled,mailEnabled,groupTypes,isAssignableToRole,visibility,membershipRule,membershipRuleProcessingState,onPremisesSyncEnabled&`$top=999"; Permission = 'GroupMember.Read.All' }
         Organization = @{ Uri = "$graphBaseUri/organization?`$select=id,displayName,verifiedDomains&`$top=999"; Permission = 'Organization.Read.All' }
         OAuth2PermissionGrants = @{ Uri = "$graphBaseUri/oauth2PermissionGrants?`$select=id,clientId,resourceId,principalId,consentType,scope&`$top=999"; Permission = 'Directory.Read.All' }
         DirectoryRoleAssignments = @{ Uri = "$graphBaseUri/roleManagement/directory/roleAssignments?`$expand=roleDefinition&`$top=999"; Permission = 'RoleManagement.Read.Directory' }
@@ -33,9 +35,43 @@ function New-InspectorTenantSnapshot {
     $limitations = [System.Collections.Generic.List[string]]::new()
     $summary = [ordered]@{}
     $truncatedCollections = [System.Collections.Generic.List[string]]::new()
+    $targetedMode = @($TargetSpecification | Where-Object { $null -ne $_ }).Count -gt 0
+    $targetResolution = $null
+    $targetedTenantCollections = $null
+
+    if ($targetedMode) {
+        $targetResolution = Resolve-InspectorAssessmentTargets -TargetSpecification $TargetSpecification -ObjectType $ObjectType -RuntimeTelemetry $RuntimeTelemetry
+        foreach ($targetEvidence in @($targetResolution.Evidence)) { $evidence.Add($targetEvidence) }
+        $targetedTenantCollections = Get-InspectorTargetedTenantCollections -TargetResolution $targetResolution -RuntimeTelemetry $RuntimeTelemetry
+        foreach ($targetEvidence in @($targetedTenantCollections.Evidence)) { $evidence.Add($targetEvidence) }
+    }
 
     foreach ($name in $collectionMap.Keys) {
         $definition = $collectionMap[$name]
+
+        if ($targetedMode -and $definition.ContainsKey('ObjectType')) {
+            $targetItems = @(Get-InspectorSnapshotProperty -InputObject $targetResolution.Collections -Name $name)
+            $targetSummary = Get-InspectorSnapshotProperty -InputObject $targetResolution.CollectionSummary -Name $name
+            $collections[$name] = @($targetItems)
+            $summary[$name] = $targetSummary
+            continue
+        }
+
+        if ($targetedMode -and $name -eq 'OAuth2PermissionGrants') {
+            $targetItems = @($targetedTenantCollections.OAuth2PermissionGrants)
+            $expectedQueries = @($targetedTenantCollections.GrantExpectedQueries)
+            $collections[$name] = @($targetItems)
+            $summary[$name] = [PSCustomObject][ordered]@{ Status=$(if($expectedQueries.Count -gt 0){'Success'}else{'NotRun'}); Count=$targetItems.Count; SourceResultCount=$targetItems.Count; Completeness=$(if($expectedQueries.Count -gt 0){'Complete'}else{'Partial'}); Truncated=$false; ExpectedQueries=@($expectedQueries) }
+            continue
+        }
+
+        if ($targetedMode -and $name -eq 'DirectoryRoleAssignments') {
+            $targetItems = @($targetedTenantCollections.DirectoryRoleAssignments)
+            $expectedQueries = @($targetedTenantCollections.RoleExpectedQueries)
+            $collections[$name] = @($targetItems)
+            $summary[$name] = [PSCustomObject][ordered]@{ Status=$(if($expectedQueries.Count -gt 0){'Success'}else{'NotRun'}); Count=$targetItems.Count; SourceResultCount=$targetItems.Count; Completeness=$(if($expectedQueries.Count -gt 0){'Complete'}else{'Partial'}); Truncated=$false; ExpectedQueries=@($expectedQueries) }
+            continue
+        }
 
         if ($definition.ContainsKey('ObjectType') -and $definition.ObjectType -notin @($ObjectType)) {
             $collections[$name] = @()
@@ -162,7 +198,7 @@ function New-InspectorTenantSnapshot {
     }
 
     foreach ($name in @(
-        'ApplicationOwners','ServicePrincipalOwners','ServicePrincipalGroupMemberships','GroupOwners','GroupMembers',
+        'ApplicationOwners','ServicePrincipalOwners','ServicePrincipalOwnedObjects','ServicePrincipalGroupMemberships','GroupOwners','GroupMembers',
         'GroupMemberships','UserTransitiveMemberships','AppRoleAssignments',
         'AppRoleAssignedTo','ApplicationCredentials','ServicePrincipalCredentials',
         'RequiredResourceAccess','ExposedAppRoles'
@@ -220,6 +256,7 @@ function New-InspectorTenantSnapshot {
 
         $servicePrincipalDefinitions = @(
             @{ Name = "ServicePrincipalOwners:$id"; Bucket = 'ServicePrincipalOwners'; Uri = "$graphBaseUri/servicePrincipals/${id}/owners?`$select=id,displayName&`$top=999"; ItemName = 'Owner'; Permission = 'Application.Read.All' },
+            @{ Name = "ServicePrincipalOwnedObjects:$id"; Bucket = 'ServicePrincipalOwnedObjects'; Uri = "$graphBaseUri/servicePrincipals/${id}/ownedObjects?`$select=id,displayName&`$top=999"; ItemName = 'OwnedObject'; Permission = 'Application.Read.All' },
             @{ Name = "AppRoleAssignments:$id"; Bucket = 'AppRoleAssignments'; Uri = "$graphBaseUri/servicePrincipals/${id}/appRoleAssignments?`$top=999"; ItemName = 'Assignment'; Permission = 'Application.Read.All' },
             @{ Name = "AppRoleAssignedTo:$id"; Bucket = 'AppRoleAssignedTo'; Uri = "$graphBaseUri/servicePrincipals/${id}/appRoleAssignedTo?`$top=999"; ItemName = 'Assignment'; Permission = 'Application.Read.All' }
         )
@@ -270,6 +307,14 @@ function New-InspectorTenantSnapshot {
         }
     }
 
+    if (@($collections.ServicePrincipals).Count -gt 0) {
+        $summary['ServicePrincipalOwnedObjects'] =
+            Get-InspectorSnapshotAggregateState `
+                -Evidence @($evidence | Where-Object { [string](Get-InspectorSnapshotProperty -InputObject $_ -Name 'QueryName') -like 'ServicePrincipalOwnedObjects:*' }) `
+                -FallbackStatus 'Success' `
+                -Count @($collections.ServicePrincipalOwnedObjects).Count
+    }
+
     foreach ($group in @($collections.Groups)) {
         $id = [string](Get-InspectorSnapshotProperty -InputObject $group -Name 'id')
         if ([string]::IsNullOrWhiteSpace($id)) {
@@ -300,6 +345,39 @@ function New-InspectorTenantSnapshot {
                 }
                 $row[$definition.ItemName] = $item
                 $collections[$definition.Bucket] += [PSCustomObject]$row
+            }
+        }
+
+        $ownerEvidence = @($evidence | Where-Object { [string](Get-InspectorSnapshotProperty -InputObject $_ -Name 'QueryName') -eq "GroupOwners:$id" } | Select-Object -First 1)
+        $groupTypes = @(Get-InspectorSnapshotProperty -InputObject $group -Name 'groupTypes')
+        $isExchangeManagedMailGroup =
+            (Get-InspectorSnapshotProperty -InputObject $group -Name 'mailEnabled') -eq $true -and
+            'Unified' -notin $groupTypes
+        $isOnPremisesSynchronized =
+            (Get-InspectorSnapshotProperty -InputObject $group -Name 'onPremisesSyncEnabled') -eq $true
+        $servicePrincipalSummary = $summary.ServicePrincipals
+        $servicePrincipalOwnedObjectSummary = $summary.ServicePrincipalOwnedObjects
+        $servicePrincipalStatus = [string](Get-InspectorSnapshotProperty -InputObject $servicePrincipalSummary -Name 'Status')
+        $servicePrincipalCompleteness = [string](Get-InspectorSnapshotProperty -InputObject $servicePrincipalSummary -Name 'Completeness')
+        $servicePrincipalOwnedObjectCompleteness = [string](Get-InspectorSnapshotProperty -InputObject $servicePrincipalOwnedObjectSummary -Name 'Completeness')
+        $ownerCompletenessLimitations = [System.Collections.Generic.List[string]]::new()
+
+        if ($targetedMode -or $servicePrincipalStatus -ne 'Success' -or $servicePrincipalCompleteness -ne 'Complete' -or $servicePrincipalOwnedObjectCompleteness -ne 'Complete') {
+            $ownerCompletenessLimitations.Add("Group '$id' owner completeness cannot be established because Microsoft Graph v1.0 /groups/{id}/owners can omit service-principal owners and the service-principal ownedObjects corpus is not tenant-complete.")
+        }
+        if ($isExchangeManagedMailGroup) {
+            $ownerCompletenessLimitations.Add("Group '$id' is a non-Unified mail-enabled group (distribution or mail-enabled security group); Microsoft documents that owners are not available through /groups/{id}/owners for Exchange-created groups.")
+        }
+        if ($isOnPremisesSynchronized) {
+            $ownerCompletenessLimitations.Add("Group '$id' appears to be synchronized from on-premises; Microsoft documents that owners are not available through /groups/{id}/owners for on-premises-synchronized groups.")
+        }
+
+        if ($ownerEvidence.Count -gt 0 -and $ownerCompletenessLimitations.Count -gt 0) {
+            $ownerEvidence[0].Status = 'Partial'
+            $ownerEvidence[0].Limitations = @((@($ownerEvidence[0].Limitations) + @($ownerCompletenessLimitations)) | Select-Object -Unique)
+            $ownerEvidence[0] | Add-Member -NotePropertyName 'Completeness' -NotePropertyValue 'Partial' -Force
+            foreach ($ownerLimitation in @($ownerCompletenessLimitations)) {
+                if (-not [string]::IsNullOrWhiteSpace($ownerLimitation)) { $limitations.Add($ownerLimitation) }
             }
         }
 
@@ -346,13 +424,18 @@ function New-InspectorTenantSnapshot {
             $servicePrincipalSummary = $summary.ServicePrincipals
             $servicePrincipalStatus = [string](Get-InspectorSnapshotProperty -InputObject $servicePrincipalSummary -Name 'Status')
             $servicePrincipalCompleteness = [string](Get-InspectorSnapshotProperty -InputObject $servicePrincipalSummary -Name 'Completeness')
-            if ($servicePrincipalStatus -ne 'Success' -or $servicePrincipalCompleteness -ne 'Complete') {
-                # The v1.0 group-members endpoint omits service principals. When
-                # the service-principal tenant collection is outside scope, failed,
-                # or truncated, reverse membership reconstruction cannot establish
-                # a complete direct-membership set. Fail closed at the canonical
-                # GroupMembers evidence row.
-                $servicePrincipalCoverageLimitation = "Group '$id' member completeness cannot be established because the ServicePrincipals tenant collection is not Success/Complete; Microsoft Graph v1.0 group members can omit service principals. Include ServicePrincipal assessment scope and complete that collection."
+            if ($targetedMode -or $servicePrincipalStatus -ne 'Success' -or $servicePrincipalCompleteness -ne 'Complete') {
+                # The v1.0 group-members endpoint can omit service principals. A
+                # targeted service-principal collection is intentionally not a
+                # tenant-complete corpus, so even a successful targeted collection
+                # cannot prove that all service-principal group members were seen.
+                # Fail closed at the canonical GroupMembers evidence row.
+                $servicePrincipalCoverageLimitation = if ($targetedMode) {
+                    "Group '$id' member completeness cannot be established during a targeted assessment because the ServicePrincipals collection is scope-limited; Microsoft Graph v1.0 group members can omit service principals."
+                }
+                else {
+                    "Group '$id' member completeness cannot be established because the ServicePrincipals tenant collection is not Success/Complete; Microsoft Graph v1.0 group members can omit service principals. Include ServicePrincipal assessment scope and complete that collection."
+                }
                 $members.Status = 'Partial'
                 $members.Limitations = @((@($members.Limitations) + @($servicePrincipalCoverageLimitation)) | Select-Object -Unique)
                 $members.Evidence.Status = 'Partial'
@@ -374,11 +457,6 @@ function New-InspectorTenantSnapshot {
         }
     }
 
-    # Microsoft Graph v1.0 currently omits service principals from
-    # /groups/{id}/members. Reconstruct those direct memberships through the
-    # stable v1.0 /servicePrincipals/{id}/memberOf relationship, then merge them
-    # into the canonical GroupMembers bucket without duplicating a member if the
-    # forward endpoint behavior changes in the future.
     $groupIdsInScope = @{}
     foreach ($group in @($collections.Groups)) {
         $groupId = [string](Get-InspectorSnapshotProperty -InputObject $group -Name 'id')
@@ -391,6 +469,72 @@ function New-InspectorTenantSnapshot {
         if (-not [string]::IsNullOrWhiteSpace($servicePrincipalId)) { $servicePrincipalsById[$servicePrincipalId] = $servicePrincipal }
     }
 
+    $groupOwnerKeys = @{}
+    foreach ($ownerRow in @($collections.GroupOwners)) {
+        $groupId = [string](Get-InspectorSnapshotProperty -InputObject $ownerRow -Name 'SourceObjectId')
+        $owner = Get-InspectorSnapshotProperty -InputObject $ownerRow -Name 'Owner'
+        $ownerId = [string](Get-InspectorSnapshotProperty -InputObject $owner -Name 'id')
+        if (-not [string]::IsNullOrWhiteSpace($groupId) -and -not [string]::IsNullOrWhiteSpace($ownerId)) {
+            $groupOwnerKeys["$groupId|$ownerId"] = $true
+        }
+    }
+
+    foreach ($ownedObjectRow in @($collections.ServicePrincipalOwnedObjects)) {
+        $servicePrincipalId = [string](Get-InspectorSnapshotProperty -InputObject $ownedObjectRow -Name 'SourceObjectId')
+        $ownedObject = Get-InspectorSnapshotProperty -InputObject $ownedObjectRow -Name 'OwnedObject'
+        $ownedObjectId = [string](Get-InspectorSnapshotProperty -InputObject $ownedObject -Name 'id')
+        $ownedObjectType = Get-InspectorDirectoryObjectTypeName -InputObject $ownedObject
+
+        if (
+            [string]::IsNullOrWhiteSpace($servicePrincipalId) -or
+            [string]::IsNullOrWhiteSpace($ownedObjectId) -or
+            $ownedObjectType -ne 'group' -or
+            -not $groupIdsInScope.ContainsKey($ownedObjectId) -or
+            -not $servicePrincipalsById.ContainsKey($servicePrincipalId)
+        ) {
+            continue
+        }
+
+        $ownerKey = "$ownedObjectId|$servicePrincipalId"
+        if ($groupOwnerKeys.ContainsKey($ownerKey)) {
+            continue
+        }
+
+        $servicePrincipal = $servicePrincipalsById[$servicePrincipalId]
+        $servicePrincipalOwner = [PSCustomObject][ordered]@{
+            '@odata.type' = '#microsoft.graph.servicePrincipal'
+            id            = $servicePrincipalId
+            displayName   = [string](Get-InspectorSnapshotProperty -InputObject $servicePrincipal -Name 'displayName')
+        }
+
+        $collections['GroupOwners'] += [PSCustomObject]@{
+            SourceObjectId = $ownedObjectId
+            Owner          = $servicePrincipalOwner
+            EvidenceId     = [string](Get-InspectorSnapshotProperty -InputObject $ownedObjectRow -Name 'EvidenceId')
+        }
+        $groupOwnerKeys[$ownerKey] = $true
+    }
+
+    $dedupedGroupOwners = [System.Collections.Generic.List[object]]::new()
+    $dedupedGroupOwnerKeys = @{}
+    foreach ($ownerRow in @($collections.GroupOwners | Sort-Object { [string](Get-InspectorSnapshotProperty -InputObject $_ -Name 'SourceObjectId') }, { [string](Get-InspectorSnapshotProperty -InputObject (Get-InspectorSnapshotProperty -InputObject $_ -Name 'Owner') -Name 'id') }, { [string](Get-InspectorSnapshotProperty -InputObject $_ -Name 'EvidenceId') })) {
+        $groupId = [string](Get-InspectorSnapshotProperty -InputObject $ownerRow -Name 'SourceObjectId')
+        $owner = Get-InspectorSnapshotProperty -InputObject $ownerRow -Name 'Owner'
+        $ownerId = [string](Get-InspectorSnapshotProperty -InputObject $owner -Name 'id')
+        $key = "$groupId|$ownerId"
+        if ([string]::IsNullOrWhiteSpace($groupId) -or [string]::IsNullOrWhiteSpace($ownerId) -or $dedupedGroupOwnerKeys.ContainsKey($key)) {
+            continue
+        }
+        $dedupedGroupOwnerKeys[$key] = $true
+        $dedupedGroupOwners.Add($ownerRow)
+    }
+    $collections['GroupOwners'] = @($dedupedGroupOwners)
+
+    # Microsoft Graph v1.0 currently omits service principals from
+    # /groups/{id}/members. Reconstruct those direct memberships through the
+    # stable v1.0 /servicePrincipals/{id}/memberOf relationship, then merge them
+    # into the canonical GroupMembers bucket without duplicating a member if the
+    # forward endpoint behavior changes in the future.
     $groupMemberKeys = @{}
     foreach ($memberRow in @($collections.GroupMembers)) {
         $groupId = [string](Get-InspectorSnapshotProperty -InputObject $memberRow -Name 'SourceObjectId')
@@ -478,13 +622,13 @@ function New-InspectorTenantSnapshot {
     foreach ($application in @($collections.Applications)) {
         $id = [string](Get-InspectorSnapshotProperty -InputObject $application -Name 'id')
         foreach ($credential in @(Get-InspectorSnapshotProperty -InputObject $application -Name 'keyCredentials')) {
-            $collections['ApplicationCredentials'] += [PSCustomObject]@{ SourceObjectId = $id; CredentialType = 'Certificate'; Credential = $credential }
+            $collections['ApplicationCredentials'] += [PSCustomObject]@{ SourceObjectId = $id; CredentialType = 'Certificate'; Credential = $credential; EvidenceId = (Get-InspectorSnapshotProperty -InputObject $application -Name 'EvidenceId') }
         }
         foreach ($credential in @(Get-InspectorSnapshotProperty -InputObject $application -Name 'passwordCredentials')) {
-            $collections['ApplicationCredentials'] += [PSCustomObject]@{ SourceObjectId = $id; CredentialType = 'Password'; Credential = $credential }
+            $collections['ApplicationCredentials'] += [PSCustomObject]@{ SourceObjectId = $id; CredentialType = 'Password'; Credential = $credential; EvidenceId = (Get-InspectorSnapshotProperty -InputObject $application -Name 'EvidenceId') }
         }
         foreach ($access in @(Get-InspectorSnapshotProperty -InputObject $application -Name 'requiredResourceAccess')) {
-            $collections['RequiredResourceAccess'] += [PSCustomObject]@{ SourceObjectId = $id; Access = $access }
+            $collections['RequiredResourceAccess'] += [PSCustomObject]@{ SourceObjectId = $id; Access = $access; EvidenceId = (Get-InspectorSnapshotProperty -InputObject $application -Name 'EvidenceId') }
         }
         foreach ($role in @(Get-InspectorSnapshotProperty -InputObject $application -Name 'appRoles')) {
             $collections['ExposedAppRoles'] += [PSCustomObject]@{ SourceObjectId = $id; AppRole = $role }
@@ -494,10 +638,10 @@ function New-InspectorTenantSnapshot {
     foreach ($servicePrincipal in @($collections.ServicePrincipals)) {
         $id = [string](Get-InspectorSnapshotProperty -InputObject $servicePrincipal -Name 'id')
         foreach ($credential in @(Get-InspectorSnapshotProperty -InputObject $servicePrincipal -Name 'keyCredentials')) {
-            $collections['ServicePrincipalCredentials'] += [PSCustomObject]@{ SourceObjectId = $id; CredentialType = 'Certificate'; Credential = $credential }
+            $collections['ServicePrincipalCredentials'] += [PSCustomObject]@{ SourceObjectId = $id; CredentialType = 'Certificate'; Credential = $credential; EvidenceId = (Get-InspectorSnapshotProperty -InputObject $servicePrincipal -Name 'EvidenceId') }
         }
         foreach ($credential in @(Get-InspectorSnapshotProperty -InputObject $servicePrincipal -Name 'passwordCredentials')) {
-            $collections['ServicePrincipalCredentials'] += [PSCustomObject]@{ SourceObjectId = $id; CredentialType = 'Password'; Credential = $credential }
+            $collections['ServicePrincipalCredentials'] += [PSCustomObject]@{ SourceObjectId = $id; CredentialType = 'Password'; Credential = $credential; EvidenceId = (Get-InspectorSnapshotProperty -InputObject $servicePrincipal -Name 'EvidenceId') }
         }
     }
 
@@ -508,10 +652,11 @@ function New-InspectorTenantSnapshot {
     $relationshipSummaryDefinitions = @(
         [PSCustomObject]@{ Name = 'ApplicationOwners'; Parent = 'Applications'; QueryPrefixes = @('ApplicationOwners:') },
         [PSCustomObject]@{ Name = 'ServicePrincipalOwners'; Parent = 'ServicePrincipals'; QueryPrefixes = @('ServicePrincipalOwners:') },
+        [PSCustomObject]@{ Name = 'ServicePrincipalOwnedObjects'; Parent = 'ServicePrincipals'; QueryPrefixes = @('ServicePrincipalOwnedObjects:') },
         [PSCustomObject]@{ Name = 'ServicePrincipalGroupMemberships'; Parent = 'ServicePrincipals'; QueryPrefixes = @('ServicePrincipalGroupMemberships:') },
         [PSCustomObject]@{ Name = 'AppRoleAssignments'; Parent = 'ServicePrincipals'; QueryPrefixes = @('AppRoleAssignments:') },
         [PSCustomObject]@{ Name = 'AppRoleAssignedTo'; Parent = 'ServicePrincipals'; QueryPrefixes = @('AppRoleAssignedTo:') },
-        [PSCustomObject]@{ Name = 'GroupOwners'; Parent = 'Groups'; QueryPrefixes = @('GroupOwners:') },
+        [PSCustomObject]@{ Name = 'GroupOwners'; Parent = 'Groups'; QueryPrefixes = @('GroupOwners:', 'ServicePrincipalOwnedObjects:') },
         [PSCustomObject]@{ Name = 'GroupMembers'; Parent = 'Groups'; QueryPrefixes = @('GroupMembers:', 'ServicePrincipalGroupMemberships:') },
         [PSCustomObject]@{ Name = 'GroupMemberships'; Parent = 'Groups'; QueryPrefixes = @('GroupMemberships:') },
         [PSCustomObject]@{ Name = 'UserTransitiveMemberships'; Parent = 'Users'; QueryPrefixes = @('UserTransitiveMemberships:') }
@@ -596,7 +741,7 @@ function New-InspectorTenantSnapshot {
         $limitations.Add($coverageLimitation)
     }
 
-    $indexes = New-InspectorTenantSnapshotIndexes -Collections ([PSCustomObject]$collections)
+    $indexes = New-InspectorTenantSnapshotIndexes -Collections ([PSCustomObject]$collections) -Evidence @($evidence)
     $microsoftPublishedServicePrincipals =
         @($collections.ServicePrincipals) |
         Where-Object {
@@ -626,6 +771,8 @@ function New-InspectorTenantSnapshot {
         FirstPartyClassificationMethod     = 'Central publisher classification using Microsoft owner-tenant IDs, a narrow Microsoft-documented exact AppId fallback, and collected Graph publisher metadata; display-name strings are not classification proof.'
         BoundedRun                         = ($MaxObjectsPerType -gt 0)
         MaxObjectsPerType                  = $MaxObjectsPerType
+        TargetedRun                        = [bool]$targetedMode
+        TargetCount                        = $(if($targetedMode){@($targetResolution.Resolutions).Count}else{0})
         TruncatedCollections               = @($truncatedCollections)
         CollectionCompleteness             = $assessmentCoverage.Completeness
         AssessmentCoverageStatus           = $assessmentCoverage.Status
@@ -642,14 +789,35 @@ function New-InspectorTenantSnapshot {
         IncompleteRequiredQueries           = @($assessmentCoverage.IncompleteQueries)
     }
 
+    $collectionScope =
+        if ($targetedMode) {
+            [PSCustomObject][ordered]@{
+                Mode = 'Targeted'
+                ObjectTypes = @($targetResolution.ResolvedObjectTypes)
+                ResolvedTargets = @($targetResolution.Resolutions)
+                ResolvedObjectKeys = @($targetResolution.ResolvedObjectKeys)
+                ScopeSignature = [string]$targetResolution.ScopeSignature
+            }
+        }
+        else {
+            [PSCustomObject][ordered]@{
+                Mode = 'TenantWide'
+                ObjectTypes = @($ObjectType | Sort-Object -Unique)
+                ResolvedTargets = @()
+                ResolvedObjectKeys = @()
+                ScopeSignature = Get-InspectorDeterministicToken -Value ("TenantWide|$((@($ObjectType | Sort-Object -Unique) -join ','))|Max=$MaxObjectsPerType")
+            }
+        }
+
     return [PSCustomObject][ordered]@{
         PSTypeName                      = 'EntraObjectInspector.TenantSnapshot'
-        SchemaVersion                   = '1.0.0'
+        SchemaVersion                   = '1.1.0'
         SnapshotId                      = [guid]::NewGuid().ToString()
         CreatedAt                       = (Get-Date).ToUniversalTime().ToString('o')
         CollectionMode                  = 'GraphIngestionOnly'
-        PersistenceMode                 = 'InMemoryTemporary'
+        PersistenceMode                 = 'PortableCapable'
         GraphCallsAllowedAfterSnapshot  = $false
+        CollectionScope                 = $collectionScope
         SourceTenantId                  = if ($context) { $context.TenantId } else { $null }
         SourceClientId                  = if ($context) { $context.ClientId } else { $null }
         Collections                     = [PSCustomObject]$collections

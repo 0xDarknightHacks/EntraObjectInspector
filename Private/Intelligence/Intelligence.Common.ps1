@@ -487,20 +487,54 @@ function New-InspectorAssessmentFinding {
         $criterionSummary = "Related observations were evaluated for $Category conditions and grouped into this report-level finding."
     }
     $issueGroups = @(Get-InspectorIssueGroupsFromObservation -Observation $RelatedObservations)
+    $whyItMattersValues = @(
+        $RelatedObservations |
+            ForEach-Object { [string](Get-InspectorIntelligenceProperty -InputObject $_ -Name 'WhyItMatters') } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+            Select-Object -Unique
+    )
+    $whyItMatters = if ($whyItMattersValues.Count -gt 0) { $whyItMattersValues -join ' ' } else { Get-InspectorFindingSeverityReason -Category $Category -Severity $Severity }
+    $baselineStates = @(
+        $RelatedObservations |
+            ForEach-Object { [string](Get-InspectorIntelligenceProperty -InputObject $_ -Name 'BaselineState') } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    )
+    $baselineState =
+        if ($baselineStates.Count -gt 0 -and @($baselineStates | Where-Object { $_ -ne 'Accepted' }).Count -eq 0) { 'Accepted' }
+        elseif ('Changed' -in $baselineStates) { 'Changed' }
+        elseif ('New' -in $baselineStates) { 'New' }
+        else { 'Existing' }
+    $evidenceProof = @(
+        $RelatedObservations |
+            Sort-Object ObservationId |
+            ForEach-Object {
+                [PSCustomObject][ordered]@{
+                    ObservationId = [string](Get-InspectorIntelligenceProperty -InputObject $_ -Name 'ObservationId')
+                    SemanticKey = [string](Get-InspectorIntelligenceProperty -InputObject $_ -Name 'SemanticKey')
+                    EvidenceIds = @(Get-InspectorIntelligenceProperty -InputObject $_ -Name 'EvidenceIds')
+                    EvidenceSupportStatus = Get-InspectorObservationEvidenceSupportStatus -Observation $_
+                }
+            }
+    )
     $seed = "$Category|$Title|$($observationIds -join ',')|$Conclusion"
 
     $finding = [PSCustomObject][ordered]@{
         PSTypeName = 'EntraObjectInspector.AssessmentFinding'
-        SchemaVersion = '0.9.0'
+        SchemaVersion = '1.0.0'
         FindingId = New-InspectorIntelligenceId -Prefix 'FINDING' -Seed $seed
         Category = $Category
         Title = $Title
         Conclusion = $Conclusion
+        WhatHappened = $Conclusion
+        WhyItMatters = $whyItMatters
+        RecommendedAction = $Recommendation
+        BaselineState = $baselineState
         Severity = $Severity
         Confidence = $Confidence
         ResultState = $resultState
         ObservationIds = @($observationIds)
         EvidenceIds = @($evidenceIds)
+        EvidenceProof = @($evidenceProof)
         EvidenceLinkStatus = $evidenceLinkStatus
         EvidenceSupportStatus = $evidenceSupportStatus
         ContributingObservationCount = @($RelatedObservations).Count

@@ -10,12 +10,21 @@ function Get-InspectorSnapshotRelationships {
 
     $collectorResults = [System.Collections.Generic.List[object]]::new()
     $candidates = @(@($Resolution.DirectMatches) + @($Resolution.RelatedObjects))
-    $snapshotEvidenceById = @{}
+    $snapshotIndexes = Get-InspectorSnapshotProperty -InputObject $TenantSnapshot -Name 'Indexes'
+    $snapshotEvidenceById = Get-InspectorSnapshotProperty -InputObject $snapshotIndexes -Name 'EvidenceById'
+    $objectRelationshipEvidenceIndex = Get-InspectorSnapshotProperty -InputObject $snapshotIndexes -Name 'ObjectRelationshipEvidenceByObjectKey'
 
-    foreach ($snapshotEvidence in @($TenantSnapshot.Evidence)) {
-        $evidenceId = [string](Get-InspectorSnapshotProperty -InputObject $snapshotEvidence -Name 'EvidenceId')
-        if (-not [string]::IsNullOrWhiteSpace($evidenceId) -and -not $snapshotEvidenceById.ContainsKey($evidenceId)) {
-            $snapshotEvidenceById[$evidenceId] = $snapshotEvidence
+    # Current snapshots index evidence once at snapshot construction/import. Keep
+    # the legacy fallback for older fixtures/artifacts that do not expose the
+    # evidence indexes, but never rescan the corpus for every candidate.
+    if ($null -eq $snapshotEvidenceById) {
+        $snapshotEvidenceById = @{}
+        foreach ($snapshotEvidence in @($TenantSnapshot.Evidence)) {
+            $evidenceId = [string](Get-InspectorSnapshotProperty -InputObject $snapshotEvidence -Name 'EvidenceId')
+            if (-not [string]::IsNullOrWhiteSpace($evidenceId) -and -not $snapshotEvidenceById.ContainsKey($evidenceId)) {
+                $snapshotEvidenceById[$evidenceId] = [System.Collections.Generic.List[object]]::new()
+                $snapshotEvidenceById[$evidenceId].Add($snapshotEvidence)
+            }
         }
     }
 
@@ -170,11 +179,19 @@ function Get-InspectorSnapshotRelationships {
         # when the query returned zero rows. Zero-result successful evidence is
         # required to prove ownerless/memberless/assignment-absence conditions,
         # while failed evidence must make the relationship collection partial.
-        foreach ($candidateEvidence in @($TenantSnapshot.Evidence | Where-Object {
-            [string](Get-InspectorSnapshotProperty -InputObject $_ -Name 'EvidenceScope') -eq 'ObjectRelationship' -and
-            [string](Get-InspectorSnapshotProperty -InputObject $_ -Name 'SubjectObjectType') -eq $objectType -and
-            [string](Get-InspectorSnapshotProperty -InputObject $_ -Name 'SubjectObjectId') -eq $objectId
-        })) {
+        $candidateEvidenceRows =
+            if ($null -ne $objectRelationshipEvidenceIndex) {
+                @(Get-InspectorSnapshotIndexSingle -Index $objectRelationshipEvidenceIndex -Key ("$objectType|$objectId"))
+            }
+            else {
+                @($TenantSnapshot.Evidence | Where-Object {
+                    [string](Get-InspectorSnapshotProperty -InputObject $_ -Name 'EvidenceScope') -eq 'ObjectRelationship' -and
+                    [string](Get-InspectorSnapshotProperty -InputObject $_ -Name 'SubjectObjectType') -eq $objectType -and
+                    [string](Get-InspectorSnapshotProperty -InputObject $_ -Name 'SubjectObjectId') -eq $objectId
+                })
+            }
+
+        foreach ($candidateEvidence in @($candidateEvidenceRows)) {
             $candidateEvidenceIdValue = [string](Get-InspectorSnapshotProperty -InputObject $candidateEvidence -Name 'EvidenceId')
             if (-not [string]::IsNullOrWhiteSpace($candidateEvidenceIdValue) -and -not $evidenceIdsSeen.ContainsKey($candidateEvidenceIdValue)) {
                 $evidenceIdsSeen[$candidateEvidenceIdValue] = $true
@@ -197,7 +214,9 @@ function Get-InspectorSnapshotRelationships {
         foreach ($directEvidenceId in $directEvidenceIds) {
             if ($snapshotEvidenceById.ContainsKey($directEvidenceId) -and -not $evidenceIdsSeen.ContainsKey($directEvidenceId)) {
                 $evidenceIdsSeen[$directEvidenceId] = $true
-                $evidence.Add($snapshotEvidenceById[$directEvidenceId])
+                foreach ($indexedEvidence in @(Get-InspectorSnapshotIndexSingle -Index $snapshotEvidenceById -Key $directEvidenceId)) {
+                    $evidence.Add($indexedEvidence)
+                }
             }
         }
 

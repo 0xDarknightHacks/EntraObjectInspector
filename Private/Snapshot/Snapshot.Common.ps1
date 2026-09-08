@@ -416,6 +416,11 @@ function Test-InspectorSnapshotRequiredEvidence {
         return $false
     }
 
+    $requiredForCoverage = Get-InspectorSnapshotProperty -InputObject $Evidence -Name 'RequiredForCoverage'
+    if ($null -ne $requiredForCoverage -and -not [System.Convert]::ToBoolean($requiredForCoverage)) {
+        return $false
+    }
+
     # /organization is report metadata support. All other executed snapshot
     # collections feed assessment semantics or prove the completeness of a
     # negative-state conclusion and are therefore release-required evidence.
@@ -469,10 +474,21 @@ function Get-InspectorSnapshotExpectedEvidencePlan {
         $status = [string](Get-InspectorSnapshotProperty -InputObject $summaryRow -Name 'Status')
 
         # Object collections intentionally excluded by -ObjectType are NotRun
-        # and are not part of that run's declared scope. Tenant-level consent
-        # and role collections are always expected in the current snapshot path.
+        # and are not part of that run's declared scope. Targeted collection
+        # supplies the exact probe/filter query names through ExpectedQueries so
+        # the evidence denominator remains independently constructed.
         if ($status -ne 'NotRun') {
-            Add-ExpectedEvidenceQuery -QueryName $baseQuery
+            $declaredExpectedQueries = @(
+                Get-InspectorSnapshotProperty -InputObject $summaryRow -Name 'ExpectedQueries' |
+                    ForEach-Object { [string]$_ } |
+                    Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+            )
+            if ($declaredExpectedQueries.Count -gt 0) {
+                foreach ($declaredQuery in $declaredExpectedQueries) { Add-ExpectedEvidenceQuery -QueryName $declaredQuery }
+            }
+            else {
+                Add-ExpectedEvidenceQuery -QueryName $baseQuery
+            }
         }
     }
 
@@ -498,7 +514,7 @@ function Get-InspectorSnapshotExpectedEvidencePlan {
             Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
             Sort-Object -Unique
     )) {
-        $servicePrincipalPrefixes = @('ServicePrincipalOwners','AppRoleAssignments','AppRoleAssignedTo')
+        $servicePrincipalPrefixes = @('ServicePrincipalOwners','ServicePrincipalOwnedObjects','AppRoleAssignments','AppRoleAssignedTo')
         if ($groupIds.Count -gt 0) {
             # Microsoft Graph v1.0 /groups/{id}/members has a documented service-principal
             # omission. The stable v1.0 servicePrincipal/memberOf relationship is collected
@@ -531,7 +547,7 @@ function Get-InspectorSnapshotExpectedEvidencePlan {
         PSTypeName             = 'EntraObjectInspector.ExpectedEvidencePlan'
         ExpectedEvidenceCount  = $expected.Count
         ExpectedQueries        = @($expected)
-        Basis                  = 'Required tenant collections plus one ApplicationOwners query per collected application; ServicePrincipalOwners, AppRoleAssignments, and AppRoleAssignedTo per collected service principal; ServicePrincipalGroupMemberships per collected service principal whenever groups are in scope; GroupOwners, GroupMembers, and GroupMemberships per collected group; and UserTransitiveMemberships per collected user. Group member completeness combines the stable v1.0 group-members collection with reverse service-principal membership evidence.'
+        Basis                  = 'Required tenant collections plus one ApplicationOwners query per collected application; ServicePrincipalOwners, ServicePrincipalOwnedObjects, AppRoleAssignments, and AppRoleAssignedTo per collected service principal; ServicePrincipalGroupMemberships per collected service principal whenever groups are in scope; GroupOwners, GroupMembers, and GroupMemberships per collected group; and UserTransitiveMemberships per collected user. Group owner and member completeness combines stable v1.0 forward collections with reverse service-principal evidence.'
     }
 }
 

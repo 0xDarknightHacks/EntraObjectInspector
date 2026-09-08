@@ -46,6 +46,26 @@ Describe 'Tenant snapshot offline pipeline' {
             }
         }
 
+
+        It 'indexes evidence by ID, subject, and tenant query for offline hot paths' {
+            $collections = [PSCustomObject]@{
+                Applications = @(); ServicePrincipals = @(); Users = @(); Groups = @()
+                ApplicationOwners = @(); ServicePrincipalOwners = @(); GroupOwners = @(); GroupMembers = @()
+                GroupMemberships = @(); UserTransitiveMemberships = @(); DirectoryRoleAssignments = @()
+                AppRoleAssignments = @(); AppRoleAssignedTo = @(); OAuth2PermissionGrants = @()
+            }
+            $evidence = @(
+                [PSCustomObject]@{ EvidenceId='ev-tenant'; EvidenceScope='TenantCollection'; QueryName='Applications'; SubjectObjectType=''; SubjectObjectId='' },
+                [PSCustomObject]@{ EvidenceId='ev-owner'; EvidenceScope='ObjectRelationship'; QueryName='ApplicationOwners'; SubjectObjectType='Application'; SubjectObjectId='app-1' }
+            )
+
+            $indexes = New-InspectorTenantSnapshotIndexes -Collections $collections -Evidence $evidence
+
+            @(Get-InspectorSnapshotIndexSingle -Index $indexes.EvidenceById -Key 'ev-owner').Count | Should -Be 1
+            @(Get-InspectorSnapshotIndexSingle -Index $indexes.ObjectRelationshipEvidenceByObjectKey -Key 'Application|app-1').Count | Should -Be 1
+            @(Get-InspectorSnapshotIndexSingle -Index $indexes.TenantCollectionEvidenceByQueryName -Key 'Applications').Count | Should -Be 1
+        }
+
         It 'resolves supported identifiers offline from indexes' {
             $snapshot = New-TestTenantSnapshot
 

@@ -12,9 +12,9 @@ Keep documentation accurate when changing public commands, configuration, output
 
 ## Release validation and dependencies
 
-Use PowerShell 7.6 or later. The release-validation baseline is PowerShell 7.6.4 with `Microsoft.Graph.Authentication` 2.39.0, `Microsoft.PowerShell.SecretManagement` 1.1.2, `Microsoft.PowerShell.SecretStore` 1.0.6, and Pester 6.1.0. Runtime minimums are declared in the module manifest; CI intentionally installs the exact tested versions. Do not raise, lower, or exact-pin runtime requirements without compatibility evidence and a full test run.
+Use PowerShell 7.6 LTS or later. Microsoft currently supports the latest servicing update of that release, PowerShell 7.6.5. The module manifest remains `PowerShellVersion = '7.6'` because it expresses the runtime-version floor/line, not the current servicing patch. The release-validation dependency baseline is `Microsoft.Graph.Authentication` 2.39.0, `Microsoft.PowerShell.SecretManagement` 1.1.2, `Microsoft.PowerShell.SecretStore` 1.0.6, and Pester 6.1.0. Do not raise, lower, or exact-pin runtime requirements without compatibility evidence and a full test run.
 
-Before a release, run `./Scripts/Test-EntraObjectInspectorRequirements.ps1 -NonInteractive -SkipGalleryReachability`, import the module, verify exactly seven exported functions, and run the complete Pester suite. The current suite contains 276 tests; the release gate requires 276 passed / 0 failed / 0 skipped. CI must remain tenant-independent and must not authenticate to Microsoft Graph.
+Before a release, run `./Scripts/Test-EntraObjectInspectorRequirements.ps1 -NonInteractive -SkipGalleryReachability`, import the module, verify exactly seven exported functions, and run the complete Pester suite. The current suite contains 307 tests; the release gate requires 307 passed / 0 failed / 0 skipped. CI must remain tenant-independent and must not authenticate to Microsoft Graph.
 
 ## Source-release hygiene
 

@@ -1,13 +1,13 @@
 function Invoke-EntraTenantInspection {
     <#
     .SYNOPSIS
-        Runs tenant-wide discovery and object-insight orchestration.
+        Runs live, targeted, or portable-snapshot object-insight orchestration.
 
     .DESCRIPTION
-        Builds an in-memory tenant snapshot first, then resolves objects and
-        builds relationships offline from that snapshot before running the
-        existing normalization, permission intelligence, rule, and observation
-        layers.
+        Builds an in-memory tenant snapshot first, or imports a previously saved
+        portable snapshot, then resolves objects and builds relationships offline
+        before running normalization, permission intelligence, rules, observations,
+        optional comparison, and assessment policy.
 
         Tenant inspection is orchestration only. It does not add scoring, attack paths,
         reporting, MITRE mapping, remediation, or new intelligence.
@@ -34,6 +34,32 @@ function Invoke-EntraTenantInspection {
 
     .PARAMETER CheckpointPath
         Optional checkpoint file path used to record object-processing progress.
+
+    .PARAMETER SnapshotPath
+        Imports a versioned portable tenant snapshot and re-runs analysis offline.
+        Graph connection and collection are not required for this path.
+
+    .PARAMETER SaveSnapshotPath
+        Saves the collected or imported tenant snapshot in the portable snapshot
+        contract for later offline reanalysis or comparison.
+
+    .PARAMETER TargetFile
+        CSV or TXT target file. CSV requires Identity and may include ObjectType.
+        TXT accepts Identity or ObjectType|Identity per line.
+
+    .PARAMETER Target
+        Explicit target entries supplied as Identity or ObjectType|Identity.
+
+    .PARAMETER CompareToSnapshotPath
+        Portable previous snapshot to compare with the current snapshot. Comparison
+        is offline and requires the same tenant and deterministic collection scope.
+
+    .PARAMETER RulePackPath
+        Constrained JSON rule pack evaluated against normalized observations.
+
+    .PARAMETER BaselinePath
+        JSON assessment baseline that annotates accepted observations and comparable
+        drift records without deleting the underlying observation or evidence.
 
     .PARAMETER Resume
         Reuses checkpoint progress ordering, but reconstructs the complete final
@@ -66,6 +92,20 @@ function Invoke-EntraTenantInspection {
 
         [string]$CheckpointPath,
 
+        [string]$SnapshotPath,
+
+        [string]$SaveSnapshotPath,
+
+        [string]$TargetFile,
+
+        [string[]]$Target = @(),
+
+        [string]$CompareToSnapshotPath,
+
+        [string]$RulePackPath,
+
+        [string]$BaselinePath,
+
         [switch]$Resume,
 
         [switch]$NoProgress
@@ -89,24 +129,106 @@ function Invoke-EntraTenantInspection {
     $script:InspectorCurrentRuntimeTelemetry = $telemetry
 
     try {
+    $offlineSnapshotMode = -not [string]::IsNullOrWhiteSpace($SnapshotPath)
+    if ($offlineSnapshotMode -and (-not [string]::IsNullOrWhiteSpace($TargetFile) -or @($Target).Count -gt 0)) {
+        throw '-SnapshotPath cannot be combined with -TargetFile or -Target because the portable snapshot already defines the collected scope.'
+    }
+
+    $targetSpecification = @()
+    if (-not $offlineSnapshotMode -and (-not [string]::IsNullOrWhiteSpace($TargetFile) -or @($Target).Count -gt 0)) {
+        $targetSpecification = @(Import-InspectorTargetSpecification -TargetFile $TargetFile -Target $Target -AllowedObjectType $ObjectType)
+    }
+
     Start-InspectorTelemetryStage -Telemetry $telemetry -Name 'TenantSnapshotCollection'
-    $snapshot =
-        New-InspectorTenantSnapshot `
-            -ObjectType $ObjectType `
-            -MaxObjectsPerType $MaxObjectsPerType `
-            -RuntimeTelemetry $telemetry
+    if ($offlineSnapshotMode) {
+        $snapshot = Import-InspectorTenantSnapshot -Path $SnapshotPath
+    }
+    else {
+        $snapshot = New-InspectorTenantSnapshot -ObjectType $ObjectType -MaxObjectsPerType $MaxObjectsPerType -TargetSpecification $targetSpecification -RuntimeTelemetry $telemetry
+    }
     Stop-InspectorTelemetryStage -Telemetry $telemetry -Name 'TenantSnapshotCollection'
+    Update-InspectorTelemetryMemorySample -Telemetry $telemetry
+
+    if (-not [string]::IsNullOrWhiteSpace($SaveSnapshotPath)) {
+        Export-InspectorTenantSnapshot -TenantSnapshot $snapshot -Path $SaveSnapshotPath -Force | Out-Null
+    }
+
+    $collectionScope = Get-InspectorSnapshotProperty -InputObject $snapshot -Name 'CollectionScope'
+    $snapshotObjectTypes = @(Get-InspectorSnapshotProperty -InputObject $collectionScope -Name 'ObjectTypes') | Where-Object { $_ -in @('Application','ServicePrincipal','User','Group') }
+    $collectionScopeMode = [string](Get-InspectorSnapshotProperty -InputObject $collectionScope -Name 'Mode')
+    $resolvedTargets = @(Get-InspectorSnapshotProperty -InputObject $collectionScope -Name 'ResolvedTargets')
+    $resolvedObjectKeys = @(Get-InspectorSnapshotProperty -InputObject $collectionScope -Name 'ResolvedObjectKeys')
+
+    # Older callers/tests may reuse a telemetry DTO created before the maturity fields
+    # existed. Add the additive profile shapes before assigning them so StrictMode
+    # remains compatible with those callers.
+    if ($null -eq $telemetry.PSObject.Properties['ExecutionProfile']) {
+        $telemetry | Add-Member -NotePropertyName ExecutionProfile -NotePropertyValue ([PSCustomObject][ordered]@{
+            Mode = 'Unknown'; SnapshotMode = ''; OfflineSnapshot = $false; Targeted = $false
+        }) -Force
+    }
+    else {
+        foreach ($profileProperty in @('Mode','SnapshotMode','OfflineSnapshot','Targeted')) {
+            if ($null -eq $telemetry.ExecutionProfile.PSObject.Properties[$profileProperty]) {
+                $defaultProfileValue = if ($profileProperty -in @('OfflineSnapshot','Targeted')) { $false } else { '' }
+                $telemetry.ExecutionProfile | Add-Member -NotePropertyName $profileProperty -NotePropertyValue $defaultProfileValue -Force
+            }
+        }
+    }
+    if ($null -eq $telemetry.PSObject.Properties['ScopeSummary']) {
+        $telemetry | Add-Member -NotePropertyName ScopeSummary -NotePropertyValue ([PSCustomObject][ordered]@{
+            Mode = ''; ObjectTypes = @(); TargetCount = 0; ResolvedObjectCount = 0; ScopeSignature = ''
+        }) -Force
+    }
+    else {
+        $scopeDefaults = [ordered]@{ Mode = ''; ObjectTypes = @(); TargetCount = 0; ResolvedObjectCount = 0; ScopeSignature = '' }
+        foreach ($scopeProperty in $scopeDefaults.Keys) {
+            if ($null -eq $telemetry.ScopeSummary.PSObject.Properties[$scopeProperty]) {
+                $telemetry.ScopeSummary | Add-Member -NotePropertyName $scopeProperty -NotePropertyValue $scopeDefaults[$scopeProperty] -Force
+            }
+        }
+    }
+    if ($null -eq $telemetry.PSObject.Properties['ThroughputSummary']) {
+        $telemetry | Add-Member -NotePropertyName ThroughputSummary -NotePropertyValue ([PSCustomObject][ordered]@{
+            ObjectsProcessed = 0; ObjectsPerSecond = $null; EndToEndObjectsPerSecond = $null; OfflineProcessingDurationMs = $null
+        }) -Force
+    }
+    else {
+        foreach ($throughputProperty in @('EndToEndObjectsPerSecond','OfflineProcessingDurationMs')) {
+            if ($null -eq $telemetry.ThroughputSummary.PSObject.Properties[$throughputProperty]) {
+                $telemetry.ThroughputSummary | Add-Member -NotePropertyName $throughputProperty -NotePropertyValue $null -Force
+            }
+        }
+    }
+
+    $telemetry.ExecutionProfile.Mode = $(if($offlineSnapshotMode){'PortableOffline'}elseif($collectionScopeMode -eq 'Targeted'){'TargetedLive'}else{'TenantWideLive'})
+    $telemetry.ExecutionProfile.SnapshotMode = $(if($offlineSnapshotMode){'PortableFile'}elseif($collectionScopeMode -eq 'Targeted'){'TargetedInMemory'}else{'InMemory'})
+    $telemetry.ExecutionProfile.OfflineSnapshot = [bool]$offlineSnapshotMode
+    $telemetry.ExecutionProfile.Targeted = ($collectionScopeMode -eq 'Targeted')
+    $telemetry.ScopeSummary.Mode = $collectionScopeMode
+    $telemetry.ScopeSummary.ObjectTypes = @($snapshotObjectTypes | Sort-Object -Unique)
+    $telemetry.ScopeSummary.TargetCount = @($resolvedTargets).Count
+    $telemetry.ScopeSummary.ResolvedObjectCount = @($resolvedObjectKeys).Count
+    $telemetry.ScopeSummary.ScopeSignature = [string](Get-InspectorSnapshotProperty -InputObject $collectionScope -Name 'ScopeSignature')
+    $effectiveObjectType = if ($offlineSnapshotMode -and -not $PSBoundParameters.ContainsKey('ObjectType') -and $snapshotObjectTypes.Count -gt 0) { @($snapshotObjectTypes) } else { @($ObjectType) }
 
     $graphCollectionCompletedAt = (Get-Date).ToUniversalTime().ToString('o')
     $graphRequestsAtSnapshotCompletion =
-        [int](Get-InspectorObjectInsightProperty `
-            -InputObject (Get-InspectorObjectInsightProperty -InputObject $telemetry -Name 'GraphRequestSummary') `
-            -Name 'TotalRequests')
+        if ($offlineSnapshotMode) { 0 }
+        else {
+            [int](Get-InspectorObjectInsightProperty -InputObject (Get-InspectorObjectInsightProperty -InputObject $telemetry -Name 'GraphRequestSummary') -Name 'TotalRequests')
+        }
+
+    $snapshotComparison = $null
+    if (-not [string]::IsNullOrWhiteSpace($CompareToSnapshotPath)) {
+        $previousSnapshot = Import-InspectorTenantSnapshot -Path $CompareToSnapshotPath
+        $snapshotComparison = Compare-InspectorTenantSnapshots -PreviousSnapshot $previousSnapshot -CurrentSnapshot $snapshot
+    }
 
     $discovery =
         ConvertFrom-InspectorTenantSnapshot `
             -TenantSnapshot $snapshot `
-            -ObjectType $ObjectType
+            -ObjectType $effectiveObjectType
 
     foreach ($limitation in @(Get-InspectorObjectInsightProperty -InputObject $discovery -Name 'Limitations')) {
         if (-not [string]::IsNullOrWhiteSpace([string]$limitation)) {
@@ -163,6 +285,8 @@ function Invoke-EntraTenantInspection {
     }
 
     $offlineProcessingStartedAt = (Get-Date).ToUniversalTime().ToString('o')
+    Start-InspectorTelemetryStage -Telemetry $telemetry -Name 'OfflineProcessing'
+    Update-InspectorTelemetryMemorySample -Telemetry $telemetry
     $total = @($objectsToProcess).Count
     $processed = 0
     $totalRetryAttempts = 0
@@ -172,6 +296,9 @@ function Invoke-EntraTenantInspection {
 
         foreach ($object in $batch) {
             $processed++
+            if (($processed % 10) -eq 0 -or $processed -eq $total) {
+                Update-InspectorTelemetryMemorySample -Telemetry $telemetry
+            }
 
             if (-not $NoProgress) {
                 $percent = if ($total -eq 0) { 100 } else { [math]::Min(100, [int](($processed / [double]$total) * 100)) }
@@ -300,6 +427,19 @@ function Invoke-EntraTenantInspection {
         Write-Progress -Activity 'Entra Object Inspector offline tenant pipeline' -Completed
     }
 
+    Stop-InspectorTelemetryStage -Telemetry $telemetry -Name 'OfflineProcessing'
+    Update-InspectorTelemetryMemorySample -Telemetry $telemetry
+    $offlineProcessingStage = $telemetry.StageDurations['OfflineProcessing']
+    $offlineProcessingDurationForShare = if ($null -ne $offlineProcessingStage) { [double]$offlineProcessingStage.DurationMs } else { 0.0 }
+    if ($offlineProcessingDurationForShare -gt 0) {
+        foreach ($offlineChildStageName in @('OfflineResolution','OfflineRelationshipBuilding','Normalization','PermissionIntelligence','ObservationEngine')) {
+            if ($telemetry.StageDurations.Contains($offlineChildStageName)) {
+                $offlineChildStage = $telemetry.StageDurations[$offlineChildStageName]
+                $offlineChildStage | Add-Member -NotePropertyName ShareOfOfflineProcessingPercent -NotePropertyValue ([math]::Round(([double]$offlineChildStage.DurationMs / $offlineProcessingDurationForShare) * 100.0, 2)) -Force
+            }
+        }
+    }
+
     $offlineProcessingCompletedAt = (Get-Date).ToUniversalTime().ToString('o')
 
     $pipeline = [PSCustomObject][ordered]@{
@@ -342,6 +482,10 @@ function Invoke-EntraTenantInspection {
             Where-Object { $null -ne $_ }
         )
 
+    $policyResult = Invoke-InspectorAssessmentPolicy -Observations $securityObservations -SnapshotComparison $snapshotComparison -RulePackPath $RulePackPath -BaselinePath $BaselinePath
+    $securityObservations = @($policyResult.Observations)
+    $snapshotComparison = $policyResult.SnapshotComparison
+
     $completedAt = (Get-Date).ToUniversalTime().ToString('o')
     $graphRequestsAtInspectionCompletion =
         [int](Get-InspectorObjectInsightProperty `
@@ -355,12 +499,8 @@ function Invoke-EntraTenantInspection {
     $telemetry | Add-Member -NotePropertyName GraphCallsAfterSnapshot -NotePropertyValue $graphCallsAfterSnapshot -Force
     $telemetry.CompletedAt = $completedAt
     $telemetry.TotalDurationMs = [int](([datetime]$completedAt - [datetime]$telemetry.StartedAt).TotalMilliseconds)
-    $memoryEnd = Get-InspectorTelemetryMemoryMB
-    $telemetry.MemorySummary.ProcessWorkingSetEndMB = $memoryEnd
-    if ($null -ne $memoryEnd -and $null -ne $telemetry.MemorySummary.ProcessWorkingSetStartMB) {
-        $telemetry.MemorySummary.ProcessWorkingSetDeltaMB = [math]::Round($memoryEnd - $telemetry.MemorySummary.ProcessWorkingSetStartMB, 2)
-        $telemetry.MemorySummary.PeakMemoryMB = [math]::Max($memoryEnd, $telemetry.MemorySummary.ProcessWorkingSetStartMB)
-    }
+    Complete-InspectorTelemetryMemorySummary -Telemetry $telemetry
+    Update-InspectorTelemetryDerivedMetrics -Telemetry $telemetry
     $telemetry.ObjectProcessingSummary.ObjectsProcessed = $pipeline.ProcessedCount
     $telemetry.ObjectProcessingSummary.ObjectsSucceeded = @($objectInsights | Where-Object Status -eq 'Resolved').Count
     $telemetry.ObjectProcessingSummary.ObjectsFailed = $pipeline.FailedCount
@@ -369,7 +509,16 @@ function Invoke-EntraTenantInspection {
     $telemetry.ObjectProcessingSummary.ResumeReplayCount = $pipeline.ResumeReplayCount
     $telemetry.RetrySummary.ObjectProcessingRetries = $pipeline.RetryAttemptCount
     $telemetry.ThroughputSummary.ObjectsProcessed = $pipeline.ProcessedCount
+    $offlineDurationMs = [double](Get-InspectorObjectInsightProperty -InputObject ($telemetry.StageDurations['OfflineProcessing']) -Name 'DurationMs')
+    $telemetry.ThroughputSummary.OfflineProcessingDurationMs = $(if($offlineDurationMs -gt 0){[int]$offlineDurationMs}else{$null})
     $telemetry.ThroughputSummary.ObjectsPerSecond =
+        if ($offlineDurationMs -gt 0) {
+            [math]::Round($pipeline.ProcessedCount / ($offlineDurationMs / 1000.0), 2)
+        }
+        else {
+            $null
+        }
+    $telemetry.ThroughputSummary.EndToEndObjectsPerSecond =
         if ($telemetry.TotalDurationMs -gt 0) {
             [math]::Round($pipeline.ProcessedCount / ($telemetry.TotalDurationMs / 1000.0), 2)
         }
@@ -399,8 +548,10 @@ function Invoke-EntraTenantInspection {
         CompletedAt                     = $completedAt
         Status                          = $status
         Completeness                    = $(if ($status -eq 'Success') { 'Complete' } else { 'Partial' })
-        ObjectTypes                     = @($ObjectType | Sort-Object -Unique)
-        SnapshotMode                    = 'InMemory'
+        ObjectTypes                     = @($effectiveObjectType | Sort-Object -Unique)
+        SnapshotMode                    = $(if($offlineSnapshotMode){'PortableFile'}elseif(@($targetSpecification).Count -gt 0){'TargetedInMemory'}else{'InMemory'})
+        PortableSnapshotPath            = $(if(-not [string]::IsNullOrWhiteSpace($SaveSnapshotPath)){$SaveSnapshotPath}elseif($offlineSnapshotMode){$SnapshotPath}else{''})
+        CollectionScope                 = $collectionScope
         SnapshotSchemaVersion           = $snapshot.SchemaVersion
         SnapshotId                      = $snapshot.SnapshotId
         GraphCollectionCompletedAt      = $graphCollectionCompletedAt
@@ -419,6 +570,10 @@ function Invoke-EntraTenantInspection {
         Logs                            = @($logs)
         Limitations                     = @($resultLimitations | Select-Object -Unique)
         RuntimeTelemetry                = $telemetry
+        SnapshotComparison              = $snapshotComparison
+        Changes                         = $(if($null -ne $snapshotComparison){@($snapshotComparison.Changes)}else{@()})
+        AssessmentPolicy                = $policyResult
+        TenantSnapshot                  = $snapshot
         Summary                         = [PSCustomObject][ordered]@{
             TenantId                    = Get-InspectorObjectInsightProperty -InputObject $tenantMetadata -Name 'TenantId'
             TenantDisplayName           = Get-InspectorObjectInsightProperty -InputObject $tenantMetadata -Name 'TenantDisplayName'
@@ -433,6 +588,9 @@ function Invoke-EntraTenantInspection {
             RetryAttemptCount           = $pipeline.RetryAttemptCount
             ObjectInsightCount          = @($objectInsights).Count
             SecurityObservationCount    = @($securityObservations).Count
+            ChangeCount                 = $(if($null -ne $snapshotComparison){[int]$snapshotComparison.ChangeCount}else{0})
+            AcceptedObservationCount    = [int](Get-InspectorSnapshotProperty -InputObject $policyResult -Name 'AcceptedObservationCount')
+            CustomObservationCount      = [int](Get-InspectorSnapshotProperty -InputObject $policyResult -Name 'CustomObservationCount')
             RuntimeTelemetry            = $telemetry
         }
     }

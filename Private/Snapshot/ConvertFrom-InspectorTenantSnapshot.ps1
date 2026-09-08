@@ -2,7 +2,9 @@ function New-InspectorTenantSnapshotIndexes {
     [CmdletBinding()]
     param (
         [Parameter(Mandatory)]
-        [object]$Collections
+        [object]$Collections,
+
+        [object[]]$Evidence = @()
     )
 
     $indexes = [ordered]@{
@@ -21,6 +23,9 @@ function New-InspectorTenantSnapshotIndexes {
         OAuth2PermissionGrantsByClientId = @{}
         OAuth2PermissionGrantsByResourceId = @{}
         DirectoryRoleAssignmentsByPrincipalId = @{}
+        EvidenceById = @{}
+        ObjectRelationshipEvidenceByObjectKey = @{}
+        TenantCollectionEvidenceByQueryName = @{}
     }
 
     foreach ($item in @($Collections.Applications)) {
@@ -77,6 +82,27 @@ function New-InspectorTenantSnapshotIndexes {
         Add-InspectorSnapshotIndexValue -Index $indexes.DirectoryRoleAssignmentsByPrincipalId -Key ([string]$item.principalId) -Value $item
     }
 
+
+    foreach ($evidenceRow in @($Evidence)) {
+        if ($null -eq $evidenceRow) { continue }
+
+        $evidenceId = [string](Get-InspectorSnapshotProperty -InputObject $evidenceRow -Name 'EvidenceId')
+        Add-InspectorSnapshotIndexValue -Index $indexes.EvidenceById -Key $evidenceId -Value $evidenceRow
+
+        $evidenceScope = [string](Get-InspectorSnapshotProperty -InputObject $evidenceRow -Name 'EvidenceScope')
+        $subjectObjectType = [string](Get-InspectorSnapshotProperty -InputObject $evidenceRow -Name 'SubjectObjectType')
+        $subjectObjectId = [string](Get-InspectorSnapshotProperty -InputObject $evidenceRow -Name 'SubjectObjectId')
+        $queryName = [string](Get-InspectorSnapshotProperty -InputObject $evidenceRow -Name 'QueryName')
+
+        if ($evidenceScope -eq 'ObjectRelationship' -and -not [string]::IsNullOrWhiteSpace($subjectObjectType) -and -not [string]::IsNullOrWhiteSpace($subjectObjectId)) {
+            Add-InspectorSnapshotIndexValue -Index $indexes.ObjectRelationshipEvidenceByObjectKey -Key ("$subjectObjectType|$subjectObjectId") -Value $evidenceRow
+        }
+
+        if ($evidenceScope -eq 'TenantCollection' -and -not [string]::IsNullOrWhiteSpace($queryName)) {
+            Add-InspectorSnapshotIndexValue -Index $indexes.TenantCollectionEvidenceByQueryName -Key $queryName -Value $evidenceRow
+        }
+    }
+
     return [PSCustomObject]$indexes
 }
 
@@ -90,28 +116,56 @@ function ConvertFrom-InspectorTenantSnapshot {
         [string[]]$ObjectType = @('Application', 'ServicePrincipal', 'User', 'Group')
     )
 
+    $defaultEvidenceByQuery = @{}
+    $tenantCollectionEvidenceIndex = Get-InspectorSnapshotProperty -InputObject (Get-InspectorSnapshotProperty -InputObject $TenantSnapshot -Name 'Indexes') -Name 'TenantCollectionEvidenceByQueryName'
+    foreach ($queryName in @('Applications','ServicePrincipals','Users','Groups')) {
+        $indexedEvidence = @(Get-InspectorSnapshotIndexSingle -Index $tenantCollectionEvidenceIndex -Key $queryName)
+        if ($indexedEvidence.Count -gt 0) {
+            $defaultEvidenceByQuery[$queryName] = [string](Get-InspectorSnapshotProperty -InputObject $indexedEvidence[0] -Name 'EvidenceId')
+        }
+    }
+
+    # Legacy/pre-index snapshot fallback: scan the evidence corpus once, not once
+    # per discovered object. Current snapshots normally carry the indexes above.
+    if ($defaultEvidenceByQuery.Count -lt 4) {
+        foreach ($evidenceRow in @($TenantSnapshot.Evidence)) {
+            $queryName = [string](Get-InspectorSnapshotProperty -InputObject $evidenceRow -Name 'QueryName')
+            if ($queryName -in @('Applications','ServicePrincipals','Users','Groups') -and -not $defaultEvidenceByQuery.ContainsKey($queryName)) {
+                $defaultEvidenceByQuery[$queryName] = [string](Get-InspectorSnapshotProperty -InputObject $evidenceRow -Name 'EvidenceId')
+            }
+        }
+    }
+
     $discovered = @(
         if ('Application' -in $ObjectType) {
             @($TenantSnapshot.Collections.Applications) | ForEach-Object {
-                ConvertTo-InspectorSnapshotDiscoveredObject -ObjectType 'Application' -RawObject $_ -EvidenceId ($TenantSnapshot.Evidence | Where-Object QueryName -eq 'Applications' | Select-Object -First 1).EvidenceId
+                $itemEvidenceId = [string](Get-InspectorSnapshotProperty -InputObject $_ -Name 'EvidenceId')
+                if ([string]::IsNullOrWhiteSpace($itemEvidenceId)) { $itemEvidenceId = [string]$defaultEvidenceByQuery['Applications'] }
+                ConvertTo-InspectorSnapshotDiscoveredObject -ObjectType 'Application' -RawObject $_ -EvidenceId $itemEvidenceId
             }
         }
         if ('ServicePrincipal' -in $ObjectType) {
             @($TenantSnapshot.Collections.ServicePrincipals) | ForEach-Object {
-                ConvertTo-InspectorSnapshotDiscoveredObject -ObjectType 'ServicePrincipal' -RawObject $_ -EvidenceId ($TenantSnapshot.Evidence | Where-Object QueryName -eq 'ServicePrincipals' | Select-Object -First 1).EvidenceId
+                $itemEvidenceId = [string](Get-InspectorSnapshotProperty -InputObject $_ -Name 'EvidenceId')
+                if ([string]::IsNullOrWhiteSpace($itemEvidenceId)) { $itemEvidenceId = [string]$defaultEvidenceByQuery['ServicePrincipals'] }
+                ConvertTo-InspectorSnapshotDiscoveredObject -ObjectType 'ServicePrincipal' -RawObject $_ -EvidenceId $itemEvidenceId
             }
         }
         if ('User' -in $ObjectType) {
             @($TenantSnapshot.Collections.Users) | ForEach-Object {
-                ConvertTo-InspectorSnapshotDiscoveredObject -ObjectType 'User' -RawObject $_ -EvidenceId ($TenantSnapshot.Evidence | Where-Object QueryName -eq 'Users' | Select-Object -First 1).EvidenceId
+                $itemEvidenceId = [string](Get-InspectorSnapshotProperty -InputObject $_ -Name 'EvidenceId')
+                if ([string]::IsNullOrWhiteSpace($itemEvidenceId)) { $itemEvidenceId = [string]$defaultEvidenceByQuery['Users'] }
+                ConvertTo-InspectorSnapshotDiscoveredObject -ObjectType 'User' -RawObject $_ -EvidenceId $itemEvidenceId
             }
         }
         if ('Group' -in $ObjectType) {
             @($TenantSnapshot.Collections.Groups) | ForEach-Object {
-                ConvertTo-InspectorSnapshotDiscoveredObject -ObjectType 'Group' -RawObject $_ -EvidenceId ($TenantSnapshot.Evidence | Where-Object QueryName -eq 'Groups' | Select-Object -First 1).EvidenceId
+                $itemEvidenceId = [string](Get-InspectorSnapshotProperty -InputObject $_ -Name 'EvidenceId')
+                if ([string]::IsNullOrWhiteSpace($itemEvidenceId)) { $itemEvidenceId = [string]$defaultEvidenceByQuery['Groups'] }
+                ConvertTo-InspectorSnapshotDiscoveredObject -ObjectType 'Group' -RawObject $_ -EvidenceId $itemEvidenceId
             }
         }
-) | Where-Object { $null -ne $_ } | Sort-Object ObjectType, ObjectId
+    ) | Where-Object { $null -ne $_ } | Sort-Object ObjectType, ObjectId
 
     $collectionSummary = Get-InspectorSnapshotProperty -InputObject $TenantSnapshot -Name 'CollectionSummary'
     $requestedCollectionNames = @(

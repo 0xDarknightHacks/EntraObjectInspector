@@ -20,6 +20,7 @@ function ConvertTo-InspectorFlatObservation {
         Category            = ConvertTo-InspectorExportString (Get-InspectorExportProperty -InputObject $Observation -Name 'Category')
         Severity            = ConvertTo-InspectorExportString (Get-InspectorExportProperty -InputObject $Observation -Name 'Severity')
         Confidence          = ConvertTo-InspectorExportString (Get-InspectorExportProperty -InputObject $Observation -Name 'Confidence')
+        BaselineState       = ConvertTo-InspectorExportString (Get-InspectorExportProperty -InputObject $Observation -Name 'BaselineState')
         Title               = ConvertTo-InspectorExportString (Get-InspectorExportProperty -InputObject $Observation -Name 'Title')
         Description         = ConvertTo-InspectorExportString (Get-InspectorExportProperty -InputObject $Observation -Name 'Description')
         AffectedObjectType  = ConvertTo-InspectorExportString (Get-InspectorExportProperty -InputObject $affectedObject -Name 'ObjectType')
@@ -411,6 +412,11 @@ function ConvertTo-InspectorFlatAssessmentFinding {
         DirectEvidenceCoveragePercent = ConvertTo-InspectorExportString (Get-InspectorExportProperty -InputObject $Finding -Name 'DirectEvidenceCoveragePercent')
         Title              = ConvertTo-InspectorExportString (Get-InspectorExportProperty -InputObject $Finding -Name 'Title')
         Conclusion         = ConvertTo-InspectorExportString (Get-InspectorExportProperty -InputObject $Finding -Name 'Conclusion')
+        WhatHappened       = ConvertTo-InspectorExportString (Get-InspectorExportProperty -InputObject $Finding -Name 'WhatHappened')
+        WhyItMatters       = ConvertTo-InspectorExportString (Get-InspectorExportProperty -InputObject $Finding -Name 'WhyItMatters')
+        RecommendedAction  = ConvertTo-InspectorExportString (Get-InspectorExportProperty -InputObject $Finding -Name 'RecommendedAction')
+        BaselineState      = ConvertTo-InspectorExportString (Get-InspectorExportProperty -InputObject $Finding -Name 'BaselineState')
+        EvidenceProof      = ConvertTo-InspectorExportString (Get-InspectorExportProperty -InputObject $Finding -Name 'EvidenceProof')
         CriterionSummary   = ConvertTo-InspectorExportString (Get-InspectorExportProperty -InputObject $Finding -Name 'CriterionSummary')
         SeverityReason     = ConvertTo-InspectorExportString (Get-InspectorExportProperty -InputObject $Finding -Name 'SeverityReason')
         ObservationCount   = ConvertTo-InspectorExportString (Get-InspectorExportProperty -InputObject $Finding -Name 'ObservationCount')
@@ -425,6 +431,29 @@ function ConvertTo-InspectorFlatAssessmentFinding {
         AffectedObjects    = ConvertTo-InspectorExportString (Get-InspectorExportProperty -InputObject $Finding -Name 'AffectedObjects')
         IssueGroups        = ConvertTo-InspectorExportString (Get-InspectorExportProperty -InputObject $Finding -Name 'IssueGroups')
         Metadata           = ConvertTo-InspectorExportString (Get-InspectorExportProperty -InputObject $Finding -Name 'Metadata')
+    }
+}
+
+function ConvertTo-InspectorFlatSnapshotChange {
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory)]
+        [object]$Change
+    )
+
+    return [PSCustomObject][ordered]@{
+        ChangeId            = ConvertTo-InspectorExportString (Get-InspectorExportProperty -InputObject $Change -Name 'ChangeId')
+        ChangeType          = ConvertTo-InspectorExportString (Get-InspectorExportProperty -InputObject $Change -Name 'ChangeType')
+        Category            = ConvertTo-InspectorExportString (Get-InspectorExportProperty -InputObject $Change -Name 'Category')
+        SemanticKey         = ConvertTo-InspectorExportString (Get-InspectorExportProperty -InputObject $Change -Name 'SemanticKey')
+        SubjectObjectType   = ConvertTo-InspectorExportString (Get-InspectorExportProperty -InputObject $Change -Name 'SubjectObjectType')
+        SubjectObjectId     = ConvertTo-InspectorExportString (Get-InspectorExportProperty -InputObject $Change -Name 'SubjectObjectId')
+        RelatedObjectId     = ConvertTo-InspectorExportString (Get-InspectorExportProperty -InputObject $Change -Name 'RelatedObjectId')
+        BaselineState       = ConvertTo-InspectorExportString (Get-InspectorExportProperty -InputObject $Change -Name 'BaselineState')
+        PreviousEvidenceIds = ConvertTo-InspectorExportString (Get-InspectorExportProperty -InputObject $Change -Name 'PreviousEvidenceIds')
+        CurrentEvidenceIds  = ConvertTo-InspectorExportString (Get-InspectorExportProperty -InputObject $Change -Name 'CurrentEvidenceIds')
+        PreviousValue       = ConvertTo-InspectorExportString (Get-InspectorExportProperty -InputObject $Change -Name 'PreviousValue')
+        CurrentValue        = ConvertTo-InspectorExportString (Get-InspectorExportProperty -InputObject $Change -Name 'CurrentValue')
     }
 }
 
@@ -725,7 +754,7 @@ function ConvertTo-InspectorAssessmentExport {
             (Get-InspectorExportProperty -InputObject $InputObject -Name 'SnapshotMode')
 
     $useSnapshotExportFastPath =
-        $snapshotMode -eq 'InMemory' -and
+        $snapshotMode -in @('InMemory','TargetedInMemory','PortableFile') -and
         $discoveryEvidence.Count -gt 0
 
     $evidenceLookup =
@@ -1043,6 +1072,10 @@ function ConvertTo-InspectorAssessmentExport {
     $scopeInventory | Add-Member -NotePropertyName FailedObjects -NotePropertyValue @($failedObjects).Count -Force
     $scopeInventory | Add-Member -NotePropertyName EvidenceRecordsCollected -NotePropertyValue @($deduplicatedEvidenceRows).Count -Force
 
+    $snapshotComparison = Get-InspectorExportProperty -InputObject $InputObject -Name 'SnapshotComparison'
+    $changes = @(Get-InspectorExportProperty -InputObject $InputObject -Name 'Changes') | Where-Object { $null -ne $_ }
+    $changeRows = @($changes | ForEach-Object { ConvertTo-InspectorFlatSnapshotChange -Change $_ })
+
     $manifest =
         [PSCustomObject][ordered]@{
             PSTypeName                     = 'EntraObjectInspector.AssessmentManifest'
@@ -1069,6 +1102,7 @@ function ConvertTo-InspectorAssessmentExport {
             DeduplicatedObservationCount   = $(if ($hasAssessmentIntelligence) { Get-InspectorExportProperty -InputObject (Get-InspectorExportProperty -InputObject $AssessmentIntelligence -Name 'Summary') -Name 'DeduplicatedObservationCount' } else { @($securityObservations).Count })
             DuplicateObservationCount      = $(if ($hasAssessmentIntelligence) { Get-InspectorExportProperty -InputObject (Get-InspectorExportProperty -InputObject $AssessmentIntelligence -Name 'Summary') -Name 'DuplicateObservationCount' } else { 0 })
             GroupedFindingCount            = @($assessmentFindings).Count
+            ChangeCount                    = @($changes).Count
             EvidenceRecordCount            = @($deduplicatedEvidenceRows).Count
             FailedObjectCount              = @($failedObjects).Count
             TenantId                       = $tenantId
@@ -1111,6 +1145,7 @@ function ConvertTo-InspectorAssessmentExport {
             DeduplicatedObservationCount = $(if ($hasAssessmentIntelligence) { Get-InspectorExportProperty -InputObject (Get-InspectorExportProperty -InputObject $AssessmentIntelligence -Name 'Summary') -Name 'DeduplicatedObservationCount' } else { @($securityObservations).Count })
             DuplicateObservationCount = $(if ($hasAssessmentIntelligence) { Get-InspectorExportProperty -InputObject (Get-InspectorExportProperty -InputObject $AssessmentIntelligence -Name 'Summary') -Name 'DuplicateObservationCount' } else { 0 })
             GroupedFindingCount       = @($assessmentFindings).Count
+            ChangeCount               = @($changes).Count
             EvidenceRecordCount       = @($deduplicatedEvidenceRows).Count
             AssessmentIntelligenceIncluded = $hasAssessmentIntelligence
             AssessmentFindingCount    = @($assessmentFindings).Count
@@ -1152,5 +1187,8 @@ function ConvertTo-InspectorAssessmentExport {
         AssessmentCorrelationRows     = @($assessmentCorrelationRows)
         AssessmentLimitations         = @($assessmentLimitations)
         AssessmentLimitationRows      = @($assessmentLimitationRows)
+        SnapshotComparison            = $snapshotComparison
+        SnapshotChanges               = @($changes)
+        SnapshotChangeRows             = @($changeRows)
     }
 }

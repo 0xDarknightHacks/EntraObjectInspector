@@ -21,17 +21,42 @@ Describe 'Runtime telemetry' {
                     Status = 'Success'
                 })
 
-            $telemetry.SchemaVersion | Should -Be '1.1.0'
+            $telemetry.SchemaVersion | Should -Be '1.2.0'
             $telemetry.StageDurations.TenantSnapshotCollection.Status | Should -Be 'Completed'
             $telemetry.StageDurations.TenantSnapshotCollection.DurationMs | Should -Not -BeNullOrEmpty
             $telemetry.StageDurations.TenantSnapshotCollection.InvocationCount | Should -Be 2
             $telemetry.StageDurations.TenantSnapshotCollection.FailedInvocationCount | Should -Be 0
+            $telemetry.StageDurations.TenantSnapshotCollection.AverageDurationMs | Should -BeGreaterOrEqual 0
             $telemetry.GraphRequestSummary.TotalRequests | Should -Be 1
             $telemetry.GraphRequestSummary.SuccessfulRequests | Should -Be 1
             $telemetry.GraphRequestsByEndpoint['/v1.0/applications'] | Should -Be 1
             $telemetry.ExternalEndpointSummary.ObservedExternalHosts | Should -Contain 'graph.microsoft.com'
             $telemetry.ExternalEndpointSummary.UnexpectedExternalHosts.Count | Should -Be 0
             ($telemetry | ConvertTo-Json -Depth 10) | Should -Not -Match 'secret|token|authorization|raw response'
+        }
+
+
+        It 'derives batching-efficiency metrics and exposes memory semantics explicitly' {
+            $telemetry = New-InspectorRuntimeTelemetry
+            $telemetry.GraphRequestSummary.TotalRequests = 10
+            $telemetry.GraphTransportSummary.TotalHttpRequests = 3
+            $telemetry.GraphTransportSummary.SingleHttpRequests = 1
+            $telemetry.GraphTransportSummary.BatchHttpRequests = 2
+            $telemetry.GraphTransportSummary.BatchSubrequestExecutions = 9
+
+            Update-InspectorTelemetryDerivedMetrics -Telemetry $telemetry
+            Update-InspectorTelemetryMemorySample -Telemetry $telemetry
+            Complete-InspectorTelemetryMemorySummary -Telemetry $telemetry
+
+            $telemetry.GraphTransportSummary.LogicalRequestsPerHttpRequest | Should -Be 3.33
+            $telemetry.GraphTransportSummary.TransportExecutionsPerHttpRequest | Should -Be 3.33
+            $telemetry.GraphTransportSummary.AverageBatchSubrequestsPerRequest | Should -Be 4.5
+            $telemetry.GraphTransportSummary.BatchExecutionSharePercent | Should -Be 90
+            $telemetry.MemorySummary.PeakMemorySource | Should -Be 'Process.PeakWorkingSet64'
+            $telemetry.MemorySummary.PeakMemoryScope | Should -Be 'ProcessLifetimeHighWaterMark'
+            $telemetry.MemorySummary.MemorySampleCount | Should -BeGreaterThan 0
+            $telemetry.MemorySummary.RunObservedWorkingSetPeakMB | Should -Not -BeNullOrEmpty
+            $telemetry.MemorySummary.RunPeakMemoryStatus | Should -BeIn @('ExactNewProcessHighWaterMark','PriorProcessHighWaterMarkNotExceeded')
         }
 
         It 'flags unexpected external hosts if observable' {

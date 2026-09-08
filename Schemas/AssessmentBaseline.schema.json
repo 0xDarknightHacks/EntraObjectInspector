@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.entraobjectinspector.local/assessment-baseline/1.0.0",
+  "title": "Entra Object Inspector Assessment Baseline",
+  "type": "object",
+  "required": ["ContractName", "SchemaVersion", "Entries"],
+  "properties": {
+    "ContractName": { "const": "EntraObjectInspector.AssessmentBaseline" },
+    "SchemaVersion": { "const": "1.0.0" },
+    "Entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["Kind", "SemanticKey"],
+        "properties": {
+          "Kind": { "enum": ["Observation", "ComparableRecord"] },
+          "SemanticKey": { "type": "string", "minLength": 1 },
+          "Fingerprint": { "type": "string" },
+          "Reason": { "type": "string" }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": false
+}

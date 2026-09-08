@@ -19,6 +19,7 @@ function Stop-InspectorTelemetryStage {
             DurationMs            = 0
             InvocationCount       = 0
             FailedInvocationCount = 0
+            AverageDurationMs     = 0
             CurrentStartedAt      = $null
         }
     }
@@ -28,7 +29,8 @@ function Stop-InspectorTelemetryStage {
         @{ Name = 'InvocationCount'; Value = 0 },
         @{ Name = 'FailedInvocationCount'; Value = 0 },
         @{ Name = 'CurrentStartedAt'; Value = $null },
-        @{ Name = 'DurationMs'; Value = 0 }
+        @{ Name = 'DurationMs'; Value = 0 },
+        @{ Name = 'AverageDurationMs'; Value = 0 }
     )) {
         if ($null -eq $stage.PSObject.Properties[$propertyDefinition.Name]) {
             $stage | Add-Member -NotePropertyName $propertyDefinition.Name -NotePropertyValue $propertyDefinition.Value -Force
@@ -47,6 +49,9 @@ function Stop-InspectorTelemetryStage {
         $stage.InvocationCount = [int]$stage.InvocationCount + 1
         if ($Status -eq 'Failed') {
             $stage.FailedInvocationCount = [int]$stage.FailedInvocationCount + 1
+        }
+        if ([int]$stage.InvocationCount -gt 0) {
+            $stage.AverageDurationMs = [math]::Round(([double]$stage.DurationMs / [double]$stage.InvocationCount), 2)
         }
     }
 

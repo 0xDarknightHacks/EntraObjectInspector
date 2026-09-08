@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.entraobjectinspector.local/portable-tenant-snapshot/1.0.0",
+  "title": "Entra Object Inspector Portable Tenant Snapshot",
+  "type": "object",
+  "required": [
+    "ContractName",
+    "ContractVersion",
+    "Integrity",
+    "Snapshot"
+  ],
+  "properties": {
+    "ContractName": {
+      "const": "EntraObjectInspector.PortableTenantSnapshot"
+    },
+    "ContractVersion": {
+      "const": "1.0.0"
+    },
+    "ExportedAt": {
+      "type": "string",
+      "minLength": 1
+    },
+    "Integrity": {
+      "type": "object",
+      "required": [
+        "Algorithm",
+        "PayloadHash"
+      ],
+      "properties": {
+        "Algorithm": {
+          "const": "SHA256"
+        },
+        "PayloadHash": {
+          "type": "string",
+          "pattern": "^[A-Fa-f0-9]{64}$"
+        }
+      },
+      "additionalProperties": true
+    },
+    "Snapshot": {
+      "type": "object",
+      "required": [
+        "SchemaVersion",
+        "SnapshotId",
+        "CreatedAt",
+        "GraphCallsAllowedAfterSnapshot",
+        "CollectionScope",
+        "CollectionSummary",
+        "AssessmentCoverage",
+        "TenantMetadata",
+        "ScopeInventory",
+        "Collections",
+        "Evidence"
+      ],
+      "properties": {
+        "SchemaVersion": {
+          "type": "string",
+          "pattern": "^1\\."
+        },
+        "SnapshotId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "GraphCallsAllowedAfterSnapshot": {
+          "const": false
+        },
+        "CollectionScope": {
+          "type": "object"
+        },
+        "Collections": {
+          "type": "object",
+          "required": [
+            "Applications",
+            "ServicePrincipals",
+            "Users",
+            "Groups",
+            "Organization",
+            "OAuth2PermissionGrants",
+            "DirectoryRoleAssignments",
+            "ApplicationOwners",
+            "ServicePrincipalOwners",
+            "ServicePrincipalOwnedObjects",
+            "ServicePrincipalGroupMemberships",
+            "GroupOwners",
+            "GroupMembers",
+            "GroupMemberships",
+            "UserTransitiveMemberships",
+            "AppRoleAssignments",
+            "AppRoleAssignedTo",
+            "ApplicationCredentials",
+            "ServicePrincipalCredentials",
+            "RequiredResourceAccess",
+            "ExposedAppRoles"
+          ],
+          "additionalProperties": true
+        },
+        "Evidence": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "EvidenceId"
+            ],
+            "properties": {
+              "EvidenceId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": true
+          }
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": false
+}

@@ -18,6 +18,7 @@ function Start-InspectorTelemetryStage {
             DurationMs            = 0
             InvocationCount       = 0
             FailedInvocationCount = 0
+            AverageDurationMs     = 0
             CurrentStartedAt      = $now
         }
         return
@@ -30,6 +31,9 @@ function Start-InspectorTelemetryStage {
     }
     if ($null -eq $stage.PSObject.Properties['FailedInvocationCount']) {
         $stage | Add-Member -NotePropertyName 'FailedInvocationCount' -NotePropertyValue 0 -Force
+    }
+    if ($null -eq $stage.PSObject.Properties['AverageDurationMs']) {
+        $stage | Add-Member -NotePropertyName 'AverageDurationMs' -NotePropertyValue 0 -Force
     }
     if ($null -eq $stage.PSObject.Properties['CurrentStartedAt']) {
         $stage | Add-Member -NotePropertyName 'CurrentStartedAt' -NotePropertyValue $null -Force

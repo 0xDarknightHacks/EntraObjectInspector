@@ -19,10 +19,18 @@ Describe 'Invoke-EntraTenantInspection' {
                         SourceEndpoint = 'https://graph.microsoft.com/v1.0/applications'
                     })
 
+                $isTargeted = @($TargetSpecification).Count -gt 0
                 [PSCustomObject]@{
                     SchemaVersion = '1.0.0'
                     SnapshotId = 'snapshot-1'
                     CreatedAt = (Get-Date).ToUniversalTime().ToString('o')
+                    CollectionScope = [PSCustomObject]@{
+                        Mode = $(if ($isTargeted) { 'Targeted' } else { 'TenantWide' })
+                        ObjectTypes = @('Application')
+                        ResolvedTargets = $(if ($isTargeted) { @([PSCustomObject]@{ ObjectType = 'Application'; Identity = 'app-1'; ObjectKey = 'Application:app-1' }) } else { @() })
+                        ResolvedObjectKeys = $(if ($isTargeted) { @('Application:app-1') } else { @() })
+                        ScopeSignature = $(if ($isTargeted) { 'targeted-test-scope' } else { 'tenant-wide-test-scope' })
+                    }
                     Collections = [PSCustomObject]@{}
                     Indexes = [PSCustomObject]@{}
                     Evidence = @()
@@ -136,6 +144,10 @@ Describe 'Invoke-EntraTenantInspection' {
             $result.Pipeline.ResumeReplayCount | Should -Be 1
             $result.Limitations -join ' ' | Should -Match 'replayed from the current snapshot'
             $result.RuntimeTelemetry | Should -Not -BeNullOrEmpty
+            $result.RuntimeTelemetry.ExecutionProfile.Mode | Should -Be 'TenantWideLive'
+            $result.RuntimeTelemetry.StageDurations.OfflineProcessing.InvocationCount | Should -Be 1
+            $result.RuntimeTelemetry.ThroughputSummary.OfflineProcessingDurationMs | Should -Not -BeNullOrEmpty
+            $result.RuntimeTelemetry.ThroughputSummary.ObjectsPerSecond | Should -Not -BeNullOrEmpty
 
             Should -Invoke New-InspectorTenantSnapshot -Times 1 -Exactly
             Should -Invoke ConvertFrom-InspectorTenantSnapshot -Times 1 -Exactly
@@ -239,5 +251,65 @@ Describe 'Invoke-EntraTenantInspection' {
             $result.GraphCallsAfterSnapshot | Should -Be 0
             Should -Invoke Resolve-EntraObjectFromSnapshot -Times 3 -Exactly
         }
+
+        It 'profiles portable snapshot execution separately and issues no Graph collection requests' {
+            Mock Import-InspectorTenantSnapshot {
+                $script:snapshotBuilt = $true
+                [PSCustomObject]@{
+                    SchemaVersion = '1.1.0'
+                    SnapshotId = 'portable-snapshot-1'
+                    CreatedAt = (Get-Date).ToUniversalTime().ToString('o')
+                    CollectionScope = [PSCustomObject]@{
+                        Mode = 'TenantWide'
+                        ObjectTypes = @('Application')
+                        ResolvedTargets = @()
+                        ResolvedObjectKeys = @()
+                        ScopeSignature = 'portable-test-scope'
+                    }
+                    Collections = [PSCustomObject]@{}
+                    Indexes = [PSCustomObject]@{}
+                    Evidence = @()
+                    Limitations = @()
+                }
+            }
+
+            $result =
+                Invoke-EntraTenantInspection `
+                    -SnapshotPath (Join-Path $TestDrive 'portable.json') `
+                    -ObjectType @('Application') `
+                    -BatchSize 1 `
+                    -NoProgress
+
+            $result.Status | Should -Be 'Success'
+            $result.SnapshotMode | Should -Be 'PortableFile'
+            $result.RuntimeTelemetry.ExecutionProfile.Mode | Should -Be 'PortableOffline'
+            $result.RuntimeTelemetry.ExecutionProfile.OfflineSnapshot | Should -BeTrue
+            $result.RuntimeTelemetry.ScopeSummary.TargetCount | Should -Be 0
+            $result.GraphRequestsAtSnapshotCompletion | Should -Be 0
+            $result.GraphRequestsAtInspectionCompletion | Should -Be 0
+            $result.GraphCallsAfterSnapshot | Should -Be 0
+            Should -Invoke New-InspectorTenantSnapshot -Times 0 -Exactly
+            Should -Invoke Invoke-MgGraphRequest -Times 0 -Exactly
+        }
+
+        It 'reports targeted live scope and resolved target metrics' {
+            $result =
+                Invoke-EntraTenantInspection `
+                    -ObjectType @('Application') `
+                    -Target @('Application|app-1') `
+                    -BatchSize 1 `
+                    -NoProgress
+
+            $result.Status | Should -Be 'Success'
+            $result.SnapshotMode | Should -Be 'TargetedInMemory'
+            $result.RuntimeTelemetry.ExecutionProfile.Mode | Should -Be 'TargetedLive'
+            $result.RuntimeTelemetry.ExecutionProfile.Targeted | Should -BeTrue
+            $result.RuntimeTelemetry.ScopeSummary.Mode | Should -Be 'Targeted'
+            $result.RuntimeTelemetry.ScopeSummary.TargetCount | Should -Be 1
+            $result.RuntimeTelemetry.ScopeSummary.ResolvedObjectCount | Should -Be 1
+            $result.RuntimeTelemetry.ScopeSummary.ScopeSignature | Should -Be 'targeted-test-scope'
+            $result.GraphCallsAfterSnapshot | Should -Be 0
+        }
+
     }
 }

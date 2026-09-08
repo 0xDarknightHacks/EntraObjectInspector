@@ -119,6 +119,46 @@ Invoke-EntraSecurityAssessment `
 
 The command performs authentication, snapshot collection, tenant inspection, assessment intelligence, structured export, and HTML report generation.
 
+### Focused workflows
+
+Save a portable snapshot during a live assessment, then re-analyze it later without Graph collection:
+
+```powershell
+Invoke-EntraSecurityAssessment `
+    -AssessmentName "Current" `
+    -SaveSnapshotPath ".\snapshots\current.json"
+
+Invoke-EntraSecurityAssessment `
+    -AssessmentName "Offline reanalysis" `
+    -SnapshotPath ".\snapshots\current.json"
+```
+
+Limit live collection to explicit targets (CSV/TXT is also supported through `-TargetFile`):
+
+```powershell
+Invoke-EntraSecurityAssessment `
+    -AssessmentName "Targeted application review" `
+    -ObjectType Application,ServicePrincipal `
+    -Target "Application|<object-id>","ServicePrincipal|<object-id>"
+```
+
+Compare deterministic snapshots, or apply a declarative rule pack and accepted-condition baseline offline:
+
+```powershell
+Invoke-EntraSecurityAssessment `
+    -AssessmentName "Drift review" `
+    -SnapshotPath ".\snapshots\current.json" `
+    -CompareToSnapshotPath ".\snapshots\previous.json"
+
+Invoke-EntraSecurityAssessment `
+    -AssessmentName "Policy review" `
+    -SnapshotPath ".\snapshots\current.json" `
+    -RulePackPath ".\policy\rules.json" `
+    -BaselinePath ".\policy\baseline.json"
+```
+
+Interactive completion output and report telemetry distinguish tenant-wide, targeted, and portable-offline execution. Runtime telemetry includes stage timings, offline objects/second, logical versus physical Graph requests, batching efficiency, the OS process high-water mark, a run-observed sampled working-set peak, and an exact run peak when the process high-water mark advances during that assessment. `GraphCallsAfterSnapshot` remains the post-snapshot boundary check.
+
 ## Preview
 
 ### CLI assessment
@@ -222,7 +262,7 @@ Run the full Pester suite:
 Invoke-Pester -Path .\Tests -Output Detailed
 ```
 
-The v1.0.0 release baseline contains **276 tests** and requires **276 passed / 0 failed / 0 skipped**.
+The current release baseline contains **307 tests** and requires **307 passed / 0 failed / 0 skipped**.
 
 For a broader local validation:
 

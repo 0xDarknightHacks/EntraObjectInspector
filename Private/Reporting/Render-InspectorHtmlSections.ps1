@@ -1333,11 +1333,19 @@ function New-InspectorRuntimeTelemetryHtml {
 
     $stageSummary = Get-InspectorReportProperty -InputObject $telemetry -Name 'StageSummary'
     $graphSummary = Get-InspectorReportProperty -InputObject $telemetry -Name 'GraphRequestSummary'
+    $transportSummary = Get-InspectorReportProperty -InputObject $telemetry -Name 'GraphTransportSummary'
+    $throughputSummary = Get-InspectorReportProperty -InputObject $telemetry -Name 'ThroughputSummary'
+    $executionProfile = Get-InspectorReportProperty -InputObject $telemetry -Name 'ExecutionProfile'
+    $scopeSummary = Get-InspectorReportProperty -InputObject $telemetry -Name 'ScopeSummary'
     $throttlingSummary = Get-InspectorReportProperty -InputObject $telemetry -Name 'ThrottlingSummary'
     $retrySummary = Get-InspectorReportProperty -InputObject $telemetry -Name 'RetrySummary'
     $memorySummary = Get-InspectorReportProperty -InputObject $telemetry -Name 'MemorySummary'
     $externalSummary = Get-InspectorReportProperty -InputObject $telemetry -Name 'ExternalEndpointSummary'
     $orchestration = Get-InspectorReportProperty -InputObject $ReportModel -Name 'OrchestrationTelemetry'
+    $batchExecutionShare = Get-InspectorReportMetricValue -InputObject $transportSummary -Names @('BatchExecutionSharePercent')
+    $batchExecutionShareText = if ($null -eq $batchExecutionShare) { 'n/a' } else { "$batchExecutionShare%" }
+    $runPeakWorkingSet = Get-InspectorReportMetricValue -InputObject $memorySummary -Names @('RunPeakWorkingSetMB')
+    $runPeakWorkingSetText = if ($null -eq $runPeakWorkingSet) { 'n/a' } else { "$runPeakWorkingSet MB" }
 
     $rows = @(
         [PSCustomObject]@{ Field='Command runtime at report generation'; Value=(ConvertTo-InspectorReportDuration (Get-InspectorReportProperty -InputObject $orchestration -Name 'TotalCommandDurationMs')) }
@@ -1348,10 +1356,23 @@ function New-InspectorRuntimeTelemetryHtml {
         [PSCustomObject]@{ Field='Export duration'; Value=(ConvertTo-InspectorReportDuration (Get-InspectorReportProperty -InputObject $orchestration -Name 'ExportDurationMs')) }
         [PSCustomObject]@{ Field='Report generation duration'; Value=(ConvertTo-InspectorReportDuration (Get-InspectorReportProperty -InputObject $orchestration -Name 'ReportGenerationDurationMs')) }
         [PSCustomObject]@{ Field='Tenant runtime telemetry'; Value=(ConvertTo-InspectorReportDuration (Get-InspectorReportProperty -InputObject $telemetry -Name 'TotalDurationMs')) }
-        [PSCustomObject]@{ Field='Graph request count'; Value=Get-InspectorReportMetricValue -InputObject $graphSummary -Names @('TotalRequests','GraphRequestCount') }
+        [PSCustomObject]@{ Field='Execution mode'; Value=Get-InspectorReportMetricValue -InputObject $executionProfile -Names @('Mode') }
+        [PSCustomObject]@{ Field='Collection scope'; Value=Get-InspectorReportMetricValue -InputObject $scopeSummary -Names @('Mode') }
+        [PSCustomObject]@{ Field='Target count'; Value=Get-InspectorReportMetricValue -InputObject $scopeSummary -Names @('TargetCount') }
+        [PSCustomObject]@{ Field='Offline objects/sec'; Value=Get-InspectorReportMetricValue -InputObject $throughputSummary -Names @('ObjectsPerSecond') }
+        [PSCustomObject]@{ Field='Graph logical requests'; Value=Get-InspectorReportMetricValue -InputObject $graphSummary -Names @('TotalRequests','GraphRequestCount') }
+        [PSCustomObject]@{ Field='Graph physical HTTP requests'; Value=Get-InspectorReportMetricValue -InputObject $transportSummary -Names @('TotalHttpRequests') }
+        [PSCustomObject]@{ Field='Logical requests / HTTP request'; Value=Get-InspectorReportMetricValue -InputObject $transportSummary -Names @('LogicalRequestsPerHttpRequest') }
+        [PSCustomObject]@{ Field='Transport executions / HTTP request'; Value=Get-InspectorReportMetricValue -InputObject $transportSummary -Names @('TransportExecutionsPerHttpRequest') }
+        [PSCustomObject]@{ Field='Average batch subrequests'; Value=Get-InspectorReportMetricValue -InputObject $transportSummary -Names @('AverageBatchSubrequestsPerRequest') }
+        [PSCustomObject]@{ Field='Batch execution share'; Value=$batchExecutionShareText }
         [PSCustomObject]@{ Field='Throttled requests'; Value=Get-InspectorReportMetricValue -InputObject $throttlingSummary -Names @('ThrottledRequests') }
         [PSCustomObject]@{ Field='Retried requests'; Value=Get-InspectorReportMetricValue -InputObject $retrySummary -Names @('RetriedRequests') }
-        [PSCustomObject]@{ Field='Peak memory'; Value="$(Get-InspectorReportMetricValue -InputObject $memorySummary -Names @('PeakMemoryMB')) MB" }
+        [PSCustomObject]@{ Field='Process peak working set'; Value="$(Get-InspectorReportMetricValue -InputObject $memorySummary -Names @('PeakMemoryMB')) MB" }
+        [PSCustomObject]@{ Field='Run-observed working-set peak'; Value="$(Get-InspectorReportMetricValue -InputObject $memorySummary -Names @('RunObservedWorkingSetPeakMB')) MB" }
+        [PSCustomObject]@{ Field='Exact run peak working set'; Value=$runPeakWorkingSetText }
+        [PSCustomObject]@{ Field='Run peak status'; Value=Get-InspectorReportMetricValue -InputObject $memorySummary -Names @('RunPeakMemoryStatus') }
+        [PSCustomObject]@{ Field='Peak-memory scope'; Value=Get-InspectorReportMetricValue -InputObject $memorySummary -Names @('PeakMemoryScope') }
         [PSCustomObject]@{ Field='Raw snapshot persisted'; Value=Get-InspectorReportMetricValue -InputObject $telemetry -Names @('RawSnapshotPersisted') }
         [PSCustomObject]@{ Field='Unexpected external hosts'; Value=$(if ($null -ne (Get-InspectorReportMetricValue -InputObject $externalSummary -Names @('UnexpectedExternalHosts'))) { @((Get-InspectorReportMetricValue -InputObject $externalSummary -Names @('UnexpectedExternalHosts'))).Count } else { 0 }) }
     )

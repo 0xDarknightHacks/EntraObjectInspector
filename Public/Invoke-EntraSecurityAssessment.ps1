@@ -4,12 +4,34 @@ function Invoke-EntraSecurityAssessment {
         Runs the full Entra Object Inspector assessment workflow.
 
     .DESCRIPTION
-        Orchestrates the existing read-only workflow: connect to Microsoft Graph,
-        inspect tenant objects, generate assessment intelligence, export structured
-        JSON/CSV artifacts, and create a static HTML report.
+        Orchestrates the read-only workflow for a live tenant, a deterministic
+        targeted scope, or a portable offline snapshot. It generates assessment
+        intelligence, structured artifacts, and static HTML reporting. When
+        SnapshotPath is supplied, authentication and Graph collection are skipped.
 
         This command does not implement assessment logic directly and does not call
-        Microsoft Graph outside the existing connection and inspection commands.
+        Microsoft Graph outside snapshot collection.
+
+    .PARAMETER SnapshotPath
+        Portable snapshot to re-analyze offline without Graph access.
+
+    .PARAMETER SaveSnapshotPath
+        Writes the current snapshot to the versioned portable snapshot contract.
+
+    .PARAMETER TargetFile
+        CSV or TXT target specification for genuinely scoped live collection.
+
+    .PARAMETER Target
+        Explicit Identity or ObjectType|Identity target entries.
+
+    .PARAMETER CompareToSnapshotPath
+        Previous portable snapshot used for deterministic offline drift comparison.
+
+    .PARAMETER RulePackPath
+        Constrained declarative JSON rule pack applied to normalized observations.
+
+    .PARAMETER BaselinePath
+        Non-destructive assessment baseline for accepted observations and drift keys.
     #>
 
     [CmdletBinding()]
@@ -40,6 +62,20 @@ function Invoke-EntraSecurityAssessment {
         [int]$MaxRetryCount = 2,
 
         [string]$CheckpointPath,
+
+        [string]$SnapshotPath,
+
+        [string]$SaveSnapshotPath,
+
+        [string]$TargetFile,
+
+        [string[]]$Target = @(),
+
+        [string]$CompareToSnapshotPath,
+
+        [string]$RulePackPath,
+
+        [string]$BaselinePath,
 
         [switch]$Resume,
 
@@ -173,6 +209,16 @@ function Invoke-EntraSecurityAssessment {
         Write-Host ''
     }
 
+    function ConvertTo-InspectorAssessmentDuration {
+        param ([AllowNull()][object]$Milliseconds)
+
+        if ($null -eq $Milliseconds) { return 'n/a' }
+        $value = [double]$Milliseconds
+        if ($value -ge 60000) { return ('{0:N1}m' -f ($value / 60000.0)) }
+        if ($value -ge 1000) { return ('{0:N1}s' -f ($value / 1000.0)) }
+        return ('{0:N0}ms' -f $value)
+    }
+
     function Write-InspectorAssessmentCompletion {
         param (
             [AllowNull()][object]$AssessmentResult
@@ -195,14 +241,48 @@ function Invoke-EntraSecurityAssessment {
         $useColor = Test-InspectorAssessmentColorEnabled
 
         Write-Host ''
+        $executionMode = [string](Get-InspectorObjectInsightProperty -InputObject $AssessmentResult -Name 'ExecutionMode')
+        $targetCount = [int](Get-InspectorObjectInsightProperty -InputObject $AssessmentResult -Name 'TargetCount')
+        $changeCount = [int](Get-InspectorObjectInsightProperty -InputObject $AssessmentResult -Name 'ChangeCount')
+        $acceptedCount = [int](Get-InspectorObjectInsightProperty -InputObject $AssessmentResult -Name 'AcceptedObservationCount')
+        $customCount = [int](Get-InspectorObjectInsightProperty -InputObject $AssessmentResult -Name 'CustomObservationCount')
+        $snapshotSaved = [bool](Get-InspectorObjectInsightProperty -InputObject $AssessmentResult -Name 'SnapshotSaved')
+        $comparisonApplied = [bool](Get-InspectorObjectInsightProperty -InputObject $AssessmentResult -Name 'ComparisonApplied')
+        $rulePackApplied = [bool](Get-InspectorObjectInsightProperty -InputObject $AssessmentResult -Name 'RulePackApplied')
+        $baselineApplied = [bool](Get-InspectorObjectInsightProperty -InputObject $AssessmentResult -Name 'BaselineApplied')
+        $rulePackId = [string](Get-InspectorObjectInsightProperty -InputObject $AssessmentResult -Name 'RulePackId')
+        $graphRequests = Get-InspectorObjectInsightProperty -InputObject $AssessmentResult -Name 'GraphRequestCount'
+        $httpRequests = Get-InspectorObjectInsightProperty -InputObject $AssessmentResult -Name 'PhysicalHttpRequestCount'
+        $graphEfficiency = Get-InspectorObjectInsightProperty -InputObject $AssessmentResult -Name 'LogicalRequestsPerHttpRequest'
+        $orchestration = Get-InspectorObjectInsightProperty -InputObject $AssessmentResult -Name 'OrchestrationTelemetry'
+        $snapshotDuration = Get-InspectorObjectInsightProperty -InputObject $orchestration -Name 'SnapshotCollectionDurationMs'
+        $offlineDuration = Get-InspectorObjectInsightProperty -InputObject $orchestration -Name 'OfflineProcessingDurationMs'
+        $scopeSuffix = if ($targetCount -gt 0) { " | Targets: $targetCount" } else { '' }
+        $graphLine = if ($null -ne $httpRequests -and [double]$httpRequests -gt 0) { "Logical/HTTP: $graphRequests/$httpRequests ($graphEfficiency x)" } else { "Graph requests: $graphRequests" }
+        $perfLine = "Snapshot: $(ConvertTo-InspectorAssessmentDuration $snapshotDuration) | Offline: $(ConvertTo-InspectorAssessmentDuration $offlineDuration)"
+        $featureParts = [System.Collections.Generic.List[string]]::new()
+        if ($snapshotSaved) { $featureParts.Add('Snapshot saved') }
+        if ($comparisonApplied) { $featureParts.Add("Drift: $changeCount change(s)") }
+        if ($rulePackApplied) { $featureParts.Add("Rules: $(if ([string]::IsNullOrWhiteSpace($rulePackId)) { 'applied' } else { $rulePackId }) ($customCount custom)") }
+        if ($baselineApplied) { $featureParts.Add("Baseline: applied ($acceptedCount accepted)") }
+        $featureLine = $featureParts -join ' | '
+
         if ($useColor) {
             Write-Host ("[{0}] {1}" -f $marker, $headline) -ForegroundColor $(if ($successful) { 'Green' } else { 'Yellow' })
+            Write-Host ("     Mode   : {0}{1}" -f $executionMode, $scopeSuffix) -ForegroundColor DarkGray
+            if (-not [string]::IsNullOrWhiteSpace($featureLine)) { Write-Host ("     Features: {0}" -f $featureLine) -ForegroundColor DarkGray }
+            Write-Host ("     Perf   : {0}" -f $perfLine) -ForegroundColor DarkGray
+            Write-Host ("     Graph  : {0} | After snapshot: {1}" -f $graphLine, (Get-InspectorObjectInsightProperty -InputObject $AssessmentResult -Name 'GraphCallsAfterSnapshot')) -ForegroundColor DarkGray
             Write-Host ("     Package: {0} | Release eligible: {1}" -f (Get-InspectorObjectInsightProperty -InputObject $AssessmentResult -Name 'PackageValidationStatus'), $releaseEligible) -ForegroundColor DarkGray
             Write-Host ("     Export : {0}" -f (Get-InspectorObjectInsightProperty -InputObject $AssessmentResult -Name 'ExportDirectory')) -ForegroundColor DarkGray
             Write-Host ("     Report : {0}" -f (Get-InspectorObjectInsightProperty -InputObject $AssessmentResult -Name 'ReportPath')) -ForegroundColor DarkGray
         }
         else {
             Write-Host ("[{0}] {1}" -f $marker, $headline)
+            Write-Host ("     Mode   : {0}{1}" -f $executionMode, $scopeSuffix)
+            if (-not [string]::IsNullOrWhiteSpace($featureLine)) { Write-Host ("     Features: {0}" -f $featureLine) }
+            Write-Host ("     Perf   : {0}" -f $perfLine)
+            Write-Host ("     Graph  : {0} | After snapshot: {1}" -f $graphLine, (Get-InspectorObjectInsightProperty -InputObject $AssessmentResult -Name 'GraphCallsAfterSnapshot'))
             Write-Host ("     Package: {0} | Release eligible: {1}" -f (Get-InspectorObjectInsightProperty -InputObject $AssessmentResult -Name 'PackageValidationStatus'), $releaseEligible)
             Write-Host ("     Export : {0}" -f (Get-InspectorObjectInsightProperty -InputObject $AssessmentResult -Name 'ExportDirectory'))
             Write-Host ("     Report : {0}" -f (Get-InspectorObjectInsightProperty -InputObject $AssessmentResult -Name 'ReportPath'))
@@ -244,6 +324,8 @@ function Invoke-EntraSecurityAssessment {
         return Get-InspectorObjectInsightProperty -InputObject $stageRecord -Name 'DurationMs'
     }
 
+    $offlineAssessment = -not [string]::IsNullOrWhiteSpace($SnapshotPath)
+
     # CLI decoration is best-effort and must never affect assessment execution.
     try { Write-InspectorAssessmentBanner } catch { }
 
@@ -263,7 +345,7 @@ function Invoke-EntraSecurityAssessment {
 
         Write-InspectorDiagnosticEvent -RunLog $runLog -Stage 'Initialize' -EventName 'AssessmentStarted' -Message 'Assessment orchestration started.'
 
-        if (-not $SkipConnect) {
+        if (-not $SkipConnect -and -not $offlineAssessment) {
             $stage = 'Authentication'
             Write-InspectorAssessmentStage -Step 1 -Name 'Authenticating'
             Set-InspectorAssessmentStageStatus -Name $stage -Status 'Running'
@@ -274,8 +356,8 @@ function Invoke-EntraSecurityAssessment {
             Write-InspectorDiagnosticEvent -RunLog $runLog -Stage $stage -EventName 'AuthenticationCompleted' -Message 'Microsoft Graph connection completed.'
         }
         else {
-            Set-InspectorAssessmentStageStatus -Name 'Authentication' -Status 'Skipped'
-            Write-InspectorDiagnosticEvent -RunLog $runLog -Stage 'Authentication' -EventName 'AuthenticationSkipped' -Message 'Graph connection skipped; caller-owned session assumed.'
+            Set-InspectorAssessmentStageStatus -Name 'Authentication' -Status $(if($offlineAssessment){'SkippedOfflineSnapshot'}else{'Skipped'})
+            Write-InspectorDiagnosticEvent -RunLog $runLog -Stage 'Authentication' -EventName 'AuthenticationSkipped' -Message $(if($offlineAssessment){'Graph connection skipped because a portable snapshot was supplied.'}else{'Graph connection skipped; caller-owned session assumed.'})
         }
 
         if ([string]::IsNullOrWhiteSpace($ReportPath)) {
@@ -308,12 +390,17 @@ function Invoke-EntraSecurityAssessment {
             NoProgress                 = $NoProgress
         }
 
+        foreach ($optionalParameter in @{ SnapshotPath=$SnapshotPath; SaveSnapshotPath=$SaveSnapshotPath; TargetFile=$TargetFile; CompareToSnapshotPath=$CompareToSnapshotPath; RulePackPath=$RulePackPath; BaselinePath=$BaselinePath }.GetEnumerator()) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$optionalParameter.Value)) { $tenantParameters[$optionalParameter.Key] = [string]$optionalParameter.Value }
+        }
+        if (@($Target).Count -gt 0) { $tenantParameters.Target = @($Target) }
+
         if (-not [string]::IsNullOrWhiteSpace($CheckpointPath)) {
             $tenantParameters.CheckpointPath = $CheckpointPath
         }
 
         $stage = 'TenantInspection'
-        Write-InspectorAssessmentStage -Step 2 -Name 'Collecting tenant snapshot'
+        Write-InspectorAssessmentStage -Step 2 -Name $(if($offlineAssessment){'Loading portable tenant snapshot'}else{'Collecting tenant snapshot'})
         Write-InspectorAssessmentStage -Step 3 -Name 'Processing objects offline'
         Set-InspectorAssessmentStageStatus -Name $stage -Status 'Running'
         Write-InspectorDiagnosticEvent -RunLog $runLog -Stage $stage -EventName 'TenantInspectionStarted' -Message 'Tenant snapshot collection and offline object processing started.'
@@ -344,6 +431,7 @@ function Invoke-EntraSecurityAssessment {
                 -InputObject $tenantResult `
                 -AssessmentName $AssessmentName
         $assessmentIntelligenceStopwatch.Stop()
+        Update-InspectorTelemetryMemorySample -Telemetry $runtimeTelemetry
         Set-InspectorAssessmentStageStatus -Name $stage -Status 'Success'
         Write-InspectorDiagnosticEvent -RunLog $runLog -Stage $stage -EventName 'AssessmentIntelligenceCompleted' -Message 'Assessment intelligence generation completed.'
 
@@ -361,6 +449,7 @@ function Invoke-EntraSecurityAssessment {
                 -RunId $runLog.RunId `
                 -ReportId $reportId
         $exportStopwatch.Stop()
+        Update-InspectorTelemetryMemorySample -Telemetry $runtimeTelemetry
         Set-InspectorAssessmentStageStatus -Name $stage -Status $exportResult.Status
         Write-InspectorDiagnosticEvent -RunLog $runLog -Stage $stage -EventName 'ExportCompleted' -Message "Structured export completed with status '$($exportResult.Status)'."
 
@@ -395,16 +484,19 @@ function Invoke-EntraSecurityAssessment {
 
         $offlineStartedAt = Get-InspectorObjectInsightProperty -InputObject $tenantResult -Name 'OfflineProcessingStartedAt'
         $offlineCompletedAt = Get-InspectorObjectInsightProperty -InputObject $tenantResult -Name 'OfflineProcessingCompletedAt'
-        $offlineProcessingDurationMs =
-            if ($null -ne $offlineStartedAt -and $null -ne $offlineCompletedAt) {
-                [int](([datetime]$offlineCompletedAt - [datetime]$offlineStartedAt).TotalMilliseconds)
-            }
-            elseif ($offlineStageDurationValues.Count -gt 0) {
-                [int](($offlineStageDurationValues | Measure-Object -Sum).Sum)
-            }
-            else {
-                $null
-            }
+        $offlineProcessingDurationMs = Get-InspectorAssessmentStageDurationMs -StageDurations $stageDurations -Name 'OfflineProcessing'
+        if ($null -eq $offlineProcessingDurationMs) {
+            $offlineProcessingDurationMs =
+                if ($null -ne $offlineStartedAt -and $null -ne $offlineCompletedAt) {
+                    [int](([datetime]$offlineCompletedAt - [datetime]$offlineStartedAt).TotalMilliseconds)
+                }
+                elseif ($offlineStageDurationValues.Count -gt 0) {
+                    [int](($offlineStageDurationValues | Measure-Object -Sum).Sum)
+                }
+                else {
+                    $null
+                }
+        }
 
         $snapshotCollectionDurationMs =
             Get-InspectorObjectInsightProperty -InputObject $stageSummary -Name 'TenantSnapshotCollectionDurationMs'
@@ -415,7 +507,7 @@ function Invoke-EntraSecurityAssessment {
 
         $orchestrationTelemetry = [PSCustomObject][ordered]@{
             PSTypeName                        = 'EntraObjectInspector.OrchestrationTelemetry'
-            SchemaVersion                     = '1.0.0'
+            SchemaVersion                     = '1.1.0'
             RunId                             = $runLog.RunId
             CommandStatus                     = 'Success'
             TenantInspectionStatus            = $tenantResult.Status
@@ -429,6 +521,11 @@ function Invoke-EntraSecurityAssessment {
             ReportPerformanceProfile          = $null
             TotalCommandDurationMs            = $commandStopwatch.ElapsedMilliseconds
             GraphRequestSummary               = Get-InspectorObjectInsightProperty -InputObject $runtimeTelemetry -Name 'GraphRequestSummary'
+            GraphTransportSummary             = Get-InspectorObjectInsightProperty -InputObject $runtimeTelemetry -Name 'GraphTransportSummary'
+            ThroughputSummary                 = Get-InspectorObjectInsightProperty -InputObject $runtimeTelemetry -Name 'ThroughputSummary'
+            MemorySummary                     = Get-InspectorObjectInsightProperty -InputObject $runtimeTelemetry -Name 'MemorySummary'
+            ExecutionProfile                  = Get-InspectorObjectInsightProperty -InputObject $runtimeTelemetry -Name 'ExecutionProfile'
+            ScopeSummary                      = Get-InspectorObjectInsightProperty -InputObject $runtimeTelemetry -Name 'ScopeSummary'
             RetrySummary                      = Get-InspectorObjectInsightProperty -InputObject $runtimeTelemetry -Name 'RetrySummary'
             ThrottlingSummary                 = Get-InspectorObjectInsightProperty -InputObject $runtimeTelemetry -Name 'ThrottlingSummary'
             ExternalEndpointSummary           = Get-InspectorObjectInsightProperty -InputObject $runtimeTelemetry -Name 'ExternalEndpointSummary'
@@ -449,6 +546,7 @@ function Invoke-EntraSecurityAssessment {
                 -ConsultantName $ConsultantName `
                 -Force
         $reportStopwatch.Stop()
+        Update-InspectorTelemetryMemorySample -Telemetry $runtimeTelemetry
         $orchestrationTelemetry.ReportGenerationDurationMs = $reportStopwatch.ElapsedMilliseconds
         $orchestrationTelemetry.ReportPerformanceProfile =
             Get-InspectorObjectInsightProperty -InputObject $reportResult -Name 'PerformanceProfile'
@@ -522,6 +620,18 @@ function Invoke-EntraSecurityAssessment {
             Get-InspectorObjectInsightProperty `
                 -InputObject $runtimeTelemetry `
                 -Name 'GraphRequestSummary'
+
+        Update-InspectorTelemetryDerivedMetrics -Telemetry $runtimeTelemetry
+        Update-InspectorTelemetryMemorySample -Telemetry $runtimeTelemetry
+        $graphTransportSummary =
+            Get-InspectorObjectInsightProperty `
+                -InputObject $runtimeTelemetry `
+                -Name 'GraphTransportSummary'
+
+        $executionProfile = Get-InspectorObjectInsightProperty -InputObject $runtimeTelemetry -Name 'ExecutionProfile'
+        $scopeSummary = Get-InspectorObjectInsightProperty -InputObject $runtimeTelemetry -Name 'ScopeSummary'
+        $tenantSummary = Get-InspectorObjectInsightProperty -InputObject $tenantResult -Name 'Summary'
+        $assessmentPolicy = Get-InspectorObjectInsightProperty -InputObject $tenantResult -Name 'AssessmentPolicy'
 
         $throttlingSummary =
             Get-InspectorObjectInsightProperty `
@@ -688,6 +798,20 @@ function Invoke-EntraSecurityAssessment {
             ExportDirectory                  = $exportResult.ExportDirectory
             ManifestPath                     = $exportResult.ManifestPath
             TenantInspectionStatus           = $tenantResult.Status
+            SnapshotMode                     = Get-InspectorObjectInsightProperty -InputObject $tenantResult -Name 'SnapshotMode'
+            ExecutionMode                    = Get-InspectorObjectInsightProperty -InputObject $executionProfile -Name 'Mode'
+            CollectionScopeMode              = Get-InspectorObjectInsightProperty -InputObject $scopeSummary -Name 'Mode'
+            TargetCount                      = Get-InspectorObjectInsightProperty -InputObject $scopeSummary -Name 'TargetCount'
+            PortableSnapshotPath             = Get-InspectorObjectInsightProperty -InputObject $tenantResult -Name 'PortableSnapshotPath'
+            SnapshotSaved                    = -not [string]::IsNullOrWhiteSpace($SaveSnapshotPath)
+            ComparisonApplied                = $null -ne (Get-InspectorObjectInsightProperty -InputObject $tenantResult -Name 'SnapshotComparison')
+            ChangeCount                      = @((Get-InspectorObjectInsightProperty -InputObject $tenantResult -Name 'Changes')).Count
+            RulePackApplied                  = [bool](Get-InspectorObjectInsightProperty -InputObject $assessmentPolicy -Name 'RulePackApplied')
+            RulePackId                       = Get-InspectorObjectInsightProperty -InputObject $assessmentPolicy -Name 'RulePackId'
+            BaselineApplied                  = [bool](Get-InspectorObjectInsightProperty -InputObject $assessmentPolicy -Name 'BaselineApplied')
+            AcceptedObservationCount         = Get-InspectorObjectInsightProperty -InputObject $tenantSummary -Name 'AcceptedObservationCount'
+            CustomObservationCount           = Get-InspectorObjectInsightProperty -InputObject $tenantSummary -Name 'CustomObservationCount'
+            SnapshotComparison               = $(if($PassThru){Get-InspectorObjectInsightProperty -InputObject $tenantResult -Name 'SnapshotComparison'}else{$null})
             ExportStatus                     = $exportResult.Status
             ReportStatus                     = $reportResult.Status
             DiagnosticsLogPath               = $runLog.DiagnosticsLogPath
@@ -715,6 +839,13 @@ function Invoke-EntraSecurityAssessment {
             TotalDurationMs                  = Get-InspectorObjectInsightProperty -InputObject $runtimeTelemetry -Name 'TotalDurationMs'
             TotalCommandDurationMs           = $orchestrationTelemetry.TotalCommandDurationMs
             GraphRequestCount                = Get-InspectorObjectInsightProperty -InputObject $graphSummary -Name 'TotalRequests'
+            PhysicalHttpRequestCount          = Get-InspectorObjectInsightProperty -InputObject $graphTransportSummary -Name 'TotalHttpRequests'
+            BatchHttpRequestCount             = Get-InspectorObjectInsightProperty -InputObject $graphTransportSummary -Name 'BatchHttpRequests'
+            BatchSubrequestExecutions         = Get-InspectorObjectInsightProperty -InputObject $graphTransportSummary -Name 'BatchSubrequestExecutions'
+            LogicalRequestsPerHttpRequest     = Get-InspectorObjectInsightProperty -InputObject $graphTransportSummary -Name 'LogicalRequestsPerHttpRequest'
+            TransportExecutionsPerHttpRequest = Get-InspectorObjectInsightProperty -InputObject $graphTransportSummary -Name 'TransportExecutionsPerHttpRequest'
+            AverageBatchSubrequestsPerRequest = Get-InspectorObjectInsightProperty -InputObject $graphTransportSummary -Name 'AverageBatchSubrequestsPerRequest'
+            BatchExecutionSharePercent        = Get-InspectorObjectInsightProperty -InputObject $graphTransportSummary -Name 'BatchExecutionSharePercent'
             GraphRequestsAtSnapshotCompletion = Get-InspectorObjectInsightProperty -InputObject $tenantResult -Name 'GraphRequestsAtSnapshotCompletion'
             GraphRequestsAtAssessmentCompletion = Get-InspectorObjectInsightProperty -InputObject $tenantResult -Name 'GraphRequestsAtAssessmentCompletion'
             GraphCallsAfterSnapshot          = Get-InspectorObjectInsightProperty -InputObject $tenantResult -Name 'GraphCallsAfterSnapshot'
@@ -723,6 +854,11 @@ function Invoke-EntraSecurityAssessment {
             ObjectsProcessed                 = Get-InspectorObjectInsightProperty -InputObject $throughputSummary -Name 'ObjectsProcessed'
             ObjectsPerSecond                 = Get-InspectorObjectInsightProperty -InputObject $throughputSummary -Name 'ObjectsPerSecond'
             PeakMemoryMB                     = Get-InspectorObjectInsightProperty -InputObject $memorySummary -Name 'PeakMemoryMB'
+            RunObservedWorkingSetPeakMB       = Get-InspectorObjectInsightProperty -InputObject $memorySummary -Name 'RunObservedWorkingSetPeakMB'
+            RunPeakWorkingSetMB               = Get-InspectorObjectInsightProperty -InputObject $memorySummary -Name 'RunPeakWorkingSetMB'
+            RunPeakMemoryExact                = Get-InspectorObjectInsightProperty -InputObject $memorySummary -Name 'RunPeakMemoryExact'
+            RunPeakMemoryStatus               = Get-InspectorObjectInsightProperty -InputObject $memorySummary -Name 'RunPeakMemoryStatus'
+            PeakMemoryScope                  = Get-InspectorObjectInsightProperty -InputObject $memorySummary -Name 'PeakMemoryScope'
             MemoryTelemetryAvailable         = Get-InspectorObjectInsightProperty -InputObject $memorySummary -Name 'MemoryTelemetryAvailable'
             OutputArtifactCount              = Get-InspectorObjectInsightProperty -InputObject $exportResult -Name 'ArtifactCount'
             TotalArtifactSizeBytes           = $totalArtifactSizeBytes

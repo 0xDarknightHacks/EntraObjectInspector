@@ -97,22 +97,12 @@ function New-InspectorObservationId {
         [string]$Seed
     )
 
-    $sha = [System.Security.Cryptography.SHA256]::Create()
-
-    try {
-        $bytes =
-            [System.Text.Encoding]::UTF8.GetBytes($Seed)
-
-        $hashBytes =
-            $sha.ComputeHash($bytes)
-
-        return 'OBS-' + (-join ($hashBytes[0..7] | ForEach-Object {
-            $_.ToString('x2')
-        })).ToUpperInvariant()
-    }
-    finally {
-        $sha.Dispose()
-    }
+    # PowerShell 7.6 runs on a modern .NET runtime with the static SHA256
+    # HashData API. Avoid creating/disposing a hash object and a formatting
+    # pipeline for every observation while preserving the exact 8-byte ID token.
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($Seed)
+    $hashBytes = [System.Security.Cryptography.SHA256]::HashData($bytes)
+    return 'OBS-' + [System.BitConverter]::ToString($hashBytes, 0, 8).Replace('-', '')
 }
 
 function New-InspectorAffectedObject {
@@ -333,6 +323,23 @@ function New-InspectorSecurityObservation {
 
     $findingEligible = $signalDisposition -in @('Actionable', 'Review')
     $semanticKey = New-InspectorObservationSemanticKey -Category $Category -Title $Title -AffectedObject $AffectedObject -SourceRuleIds $SourceRuleIds -Metadata $Metadata
+
+    # Metadata is exposed as a PSCustomObject. Always materialize a CustomRule
+    # marker (default $false) so consumers can filter custom-policy observations
+    # with direct property access even under StrictMode.
+    $metadataObject =
+        if ($null -eq $Metadata) {
+            [PSCustomObject][ordered]@{}
+        }
+        else {
+            [PSCustomObject]$Metadata
+        }
+
+    if ($null -eq $metadataObject.PSObject.Properties['CustomRule']) {
+        $metadataObject |
+            Add-Member -NotePropertyName 'CustomRule' -NotePropertyValue $false
+    }
+
     $seed = $semanticKey
 
     return [PSCustomObject][ordered]@{
@@ -358,7 +365,7 @@ function New-InspectorSecurityObservation {
         SourceRuleIds      = @($SourceRuleIds | Where-Object {
             -not [string]::IsNullOrWhiteSpace([string]$_)
         } | Select-Object -Unique)
-        Metadata           = [PSCustomObject]$Metadata
+        Metadata           = $metadataObject
     }
 }
 
