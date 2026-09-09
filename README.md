@@ -218,7 +218,7 @@ until the event-level data is required by a specific observation.
 
 ### CLI assessment
 
-![Entra Object Inspector CLI assessment](docs/images/CLI-assessment.png)
+![Entra Object Inspector CLI assessment](docs/images/cli-assessment.png)
 
 ### Assessment summary
 
