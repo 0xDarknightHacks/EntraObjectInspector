@@ -2,6 +2,7 @@ exports/
 reports/
 EntraObjectInspector-Exports/
 EntraObjectInspector-Reports/
+snapshots/
 *.zip
 *.log
 *.tmp

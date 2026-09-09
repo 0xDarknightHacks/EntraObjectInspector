@@ -22,7 +22,13 @@ function New-InspectorTenantSnapshotIndexes {
         AppRoleAssignmentsByResourceId = @{}
         OAuth2PermissionGrantsByClientId = @{}
         OAuth2PermissionGrantsByResourceId = @{}
+        DirectoryRoleDefinitionsById = @{}
         DirectoryRoleAssignmentsByPrincipalId = @{}
+        RoleAssignmentScheduleInstancesByPrincipalId = @{}
+        RoleEligibilityScheduleInstancesByPrincipalId = @{}
+        AdministrativeUnitById = @{}
+        AdministrativeUnitMembersByMemberId = @{}
+        RiskyUsersByUserId = @{}
         EvidenceById = @{}
         ObjectRelationshipEvidenceByObjectKey = @{}
         TenantCollectionEvidenceByQueryName = @{}
@@ -78,8 +84,33 @@ function New-InspectorTenantSnapshotIndexes {
         Add-InspectorSnapshotIndexValue -Index $indexes.OAuth2PermissionGrantsByResourceId -Key ([string]$item.resourceId) -Value $item
     }
 
+    foreach ($item in @(Get-InspectorSnapshotProperty -InputObject $Collections -Name 'DirectoryRoleDefinitions')) {
+        Add-InspectorSnapshotIndexValue -Index $indexes.DirectoryRoleDefinitionsById -Key ([string](Get-InspectorSnapshotProperty -InputObject $item -Name 'id')) -Value $item
+    }
+
     foreach ($item in @($Collections.DirectoryRoleAssignments)) {
         Add-InspectorSnapshotIndexValue -Index $indexes.DirectoryRoleAssignmentsByPrincipalId -Key ([string]$item.principalId) -Value $item
+    }
+
+    foreach ($item in @(Get-InspectorSnapshotProperty -InputObject $Collections -Name 'RoleAssignmentScheduleInstances')) {
+        Add-InspectorSnapshotIndexValue -Index $indexes.RoleAssignmentScheduleInstancesByPrincipalId -Key ([string](Get-InspectorSnapshotProperty -InputObject $item -Name 'principalId')) -Value $item
+    }
+
+    foreach ($item in @(Get-InspectorSnapshotProperty -InputObject $Collections -Name 'RoleEligibilityScheduleInstances')) {
+        Add-InspectorSnapshotIndexValue -Index $indexes.RoleEligibilityScheduleInstancesByPrincipalId -Key ([string](Get-InspectorSnapshotProperty -InputObject $item -Name 'principalId')) -Value $item
+    }
+
+    foreach ($item in @(Get-InspectorSnapshotProperty -InputObject $Collections -Name 'AdministrativeUnits')) {
+        Add-InspectorSnapshotIndexValue -Index $indexes.AdministrativeUnitById -Key ([string](Get-InspectorSnapshotProperty -InputObject $item -Name 'id')) -Value $item
+    }
+
+    foreach ($item in @(Get-InspectorSnapshotProperty -InputObject $Collections -Name 'AdministrativeUnitMembers')) {
+        $member = Get-InspectorSnapshotProperty -InputObject $item -Name 'Member'
+        Add-InspectorSnapshotIndexValue -Index $indexes.AdministrativeUnitMembersByMemberId -Key ([string](Get-InspectorSnapshotProperty -InputObject $member -Name 'id')) -Value $item
+    }
+
+    foreach ($item in @(Get-InspectorSnapshotProperty -InputObject $Collections -Name 'RiskyUsers')) {
+        Add-InspectorSnapshotIndexValue -Index $indexes.RiskyUsersByUserId -Key ([string](Get-InspectorSnapshotProperty -InputObject $item -Name 'id')) -Value $item
     }
 
 
@@ -233,6 +264,7 @@ function ConvertFrom-InspectorTenantSnapshot {
         Limitations       = @($TenantSnapshot.Limitations)
         TenantMetadata    = Get-InspectorSnapshotProperty -InputObject $TenantSnapshot -Name 'TenantMetadata'
         ScopeInventory    = Get-InspectorSnapshotProperty -InputObject $TenantSnapshot -Name 'ScopeInventory'
+        TenantCapabilities = Get-InspectorSnapshotProperty -InputObject $TenantSnapshot -Name 'TenantCapabilities'
         AssessmentCoverage = $assessmentCoverage
         Logs              = @()
     }

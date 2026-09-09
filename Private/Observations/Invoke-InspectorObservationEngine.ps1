@@ -79,6 +79,186 @@ function Invoke-InspectorObservationEngine {
             -ObjectInsight $ObjectInsight
     )
 
+    $relationshipsBySourceObjectId = @{}
+    $relationshipsBySourceObjectIdAndType = @{}
+    foreach ($relationship in $relationships) {
+        $relationshipSourceObjectId = [string](Get-InspectorObservationProperty -InputObject $relationship -Name 'SourceObjectId')
+        if ([string]::IsNullOrWhiteSpace($relationshipSourceObjectId)) { continue }
+
+        if (-not $relationshipsBySourceObjectId.ContainsKey($relationshipSourceObjectId)) {
+            $relationshipsBySourceObjectId[$relationshipSourceObjectId] = [System.Collections.Generic.List[object]]::new()
+        }
+        $relationshipsBySourceObjectId[$relationshipSourceObjectId].Add($relationship)
+
+        $relationshipType = [string](Get-InspectorObservationProperty -InputObject $relationship -Name 'RelationshipType')
+        if (-not [string]::IsNullOrWhiteSpace($relationshipType)) {
+            $relationshipTypeKey = "$relationshipSourceObjectId|$relationshipType"
+            if (-not $relationshipsBySourceObjectIdAndType.ContainsKey($relationshipTypeKey)) {
+                $relationshipsBySourceObjectIdAndType[$relationshipTypeKey] = [System.Collections.Generic.List[object]]::new()
+            }
+            $relationshipsBySourceObjectIdAndType[$relationshipTypeKey].Add($relationship)
+        }
+    }
+
+    function Get-InspectorObservationIndexedRelationships {
+        param (
+            [string]$SourceObjectId,
+            [string[]]$RelationshipType = @()
+        )
+
+        if ([string]::IsNullOrWhiteSpace($SourceObjectId)) {
+            if (@($RelationshipType).Count -eq 0) {
+                return @($relationships)
+            }
+
+            return @(
+                $relationships |
+                Where-Object {
+                    [string](Get-InspectorObservationProperty -InputObject $_ -Name 'RelationshipType') -in $RelationshipType
+                }
+            )
+        }
+
+        if (@($RelationshipType).Count -eq 1) {
+            $key = "$SourceObjectId|$($RelationshipType[0])"
+            if ($relationshipsBySourceObjectIdAndType.ContainsKey($key)) {
+                return @($relationshipsBySourceObjectIdAndType[$key])
+            }
+            return @()
+        }
+
+        if (-not $relationshipsBySourceObjectId.ContainsKey($SourceObjectId)) {
+            return @()
+        }
+
+        $sourceRelationships = @($relationshipsBySourceObjectId[$SourceObjectId])
+        if (@($RelationshipType).Count -eq 0) {
+            return @($sourceRelationships)
+        }
+
+        return @(
+            $sourceRelationships |
+            Where-Object {
+                [string](Get-InspectorObservationProperty -InputObject $_ -Name 'RelationshipType') -in $RelationshipType
+            }
+        )
+    }
+
+    $evidence = @(
+        (Get-InspectorObservationProperty -InputObject $ObjectInsight -Name 'Evidence') |
+        Where-Object { $null -ne $_ }
+    )
+
+    $successfulEvidenceBySubject = @{}
+    $tenantCollectionEvidenceByQuery = @{}
+    foreach ($evidenceRecord in $evidence) {
+        $evidenceId = [string](Get-InspectorObservationProperty -InputObject $evidenceRecord -Name 'EvidenceId')
+        if ([string]::IsNullOrWhiteSpace($evidenceId)) { continue }
+
+        $status = [string](Get-InspectorObservationProperty -InputObject $evidenceRecord -Name 'Status')
+        if ($status -ne 'Success') { continue }
+
+        $subjectType = [string](Get-InspectorObservationProperty -InputObject $evidenceRecord -Name 'SubjectObjectType')
+        $subjectId = [string](Get-InspectorObservationProperty -InputObject $evidenceRecord -Name 'SubjectObjectId')
+        $queryName = [string](Get-InspectorObservationProperty -InputObject $evidenceRecord -Name 'QueryName')
+        if (-not [string]::IsNullOrWhiteSpace($subjectType) -and -not [string]::IsNullOrWhiteSpace($subjectId)) {
+            $subjectKey = "$subjectType|$subjectId"
+            if (-not $successfulEvidenceBySubject.ContainsKey($subjectKey)) {
+                $successfulEvidenceBySubject[$subjectKey] = [System.Collections.Generic.List[object]]::new()
+            }
+            $successfulEvidenceBySubject[$subjectKey].Add($evidenceRecord)
+        }
+
+        $scope = [string](Get-InspectorObservationProperty -InputObject $evidenceRecord -Name 'EvidenceScope')
+        if ($scope -eq 'TenantCollection' -and -not [string]::IsNullOrWhiteSpace($queryName)) {
+            if (-not $tenantCollectionEvidenceByQuery.ContainsKey($queryName)) {
+                $tenantCollectionEvidenceByQuery[$queryName] = [System.Collections.Generic.List[object]]::new()
+            }
+            $tenantCollectionEvidenceByQuery[$queryName].Add($evidenceRecord)
+        }
+    }
+
+    function Test-InspectorObservationIndexedSubjectEvidenceSucceeded {
+        param (
+            [string]$SubjectObjectType,
+            [string]$SubjectObjectId,
+            [string]$QueryNamePattern = '*'
+        )
+
+        $subjectKey = "$SubjectObjectType|$SubjectObjectId"
+        if ($successfulEvidenceBySubject.ContainsKey($subjectKey)) {
+            foreach ($evidenceRecord in $successfulEvidenceBySubject[$subjectKey]) {
+                if ([string](Get-InspectorObservationProperty -InputObject $evidenceRecord -Name 'QueryName') -like $QueryNamePattern) {
+                    return $true
+                }
+            }
+        }
+
+        return Test-InspectorObservationSubjectEvidenceSucceeded `
+            -ObjectInsight $ObjectInsight `
+            -SubjectObjectType $SubjectObjectType `
+            -SubjectObjectId $SubjectObjectId `
+            -QueryNamePattern $QueryNamePattern
+    }
+
+    function Get-InspectorObservationIndexedEvidenceIdsForSubject {
+        param (
+            [string]$SubjectObjectType,
+            [string]$SubjectObjectId,
+            [string]$QueryNamePattern = '*'
+        )
+
+        $subjectKey = "$SubjectObjectType|$SubjectObjectId"
+        if (-not $successfulEvidenceBySubject.ContainsKey($subjectKey)) {
+            return @()
+        }
+
+        return @(
+            $successfulEvidenceBySubject[$subjectKey] |
+            Where-Object {
+                [string](Get-InspectorObservationProperty -InputObject $_ -Name 'QueryName') -like $QueryNamePattern
+            } |
+            ForEach-Object {
+                Get-InspectorObservationProperty -InputObject $_ -Name 'EvidenceId'
+            } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } |
+            Select-Object -Unique
+        )
+    }
+
+    function Test-InspectorObservationIndexedTenantCollectionEvidenceSucceeded {
+        param (
+            [string[]]$QueryName
+        )
+
+        foreach ($requiredQueryName in @($QueryName | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Select-Object -Unique)) {
+            if (-not $tenantCollectionEvidenceByQuery.ContainsKey($requiredQueryName) -or $tenantCollectionEvidenceByQuery[$requiredQueryName].Count -eq 0) {
+                return $false
+            }
+        }
+
+        return @($QueryName).Count -gt 0
+    }
+
+    function Get-InspectorObservationIndexedTenantCollectionEvidenceIds {
+        param (
+            [string[]]$QueryName
+        )
+
+        $ids = [System.Collections.Generic.List[string]]::new()
+        foreach ($queryNameValue in @($QueryName | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Select-Object -Unique)) {
+            if (-not $tenantCollectionEvidenceByQuery.ContainsKey($queryNameValue)) { continue }
+            foreach ($evidenceRecord in $tenantCollectionEvidenceByQuery[$queryNameValue]) {
+                $evidenceId = [string](Get-InspectorObservationProperty -InputObject $evidenceRecord -Name 'EvidenceId')
+                if (-not [string]::IsNullOrWhiteSpace($evidenceId) -and -not $ids.Contains($evidenceId)) {
+                    $ids.Add($evidenceId)
+                }
+            }
+        }
+
+        return @($ids)
+    }
+
     $artifacts = @(
         (Get-InspectorObservationProperty `
             -InputObject $ObjectInsight `
@@ -118,6 +298,12 @@ function Invoke-InspectorObservationEngine {
     $roleAssignableGroupReference =
         'Microsoft Entra role-assignable groups use isAssignableToRole=true to allow Microsoft Entra role assignment to a group.'
 
+    $privilegedIdentityReference =
+        'Microsoft Graph unifiedRoleAssignment and PIM schedule instance resources represent Microsoft Entra directory role privilege, principal, state, and scope context.'
+
+    $identityProtectionReference =
+        'Microsoft Entra ID Protection riskyUsers identifies users currently considered at risk based on Microsoft risk signals and retention policies.'
+
     # Identity Governance: ownership posture and owner metadata.
     foreach ($sourceObject in @(
         $sourceObjects |
@@ -147,15 +333,13 @@ function Invoke-InspectorObservationEngine {
                 -AccountEnabled (Get-InspectorObservationProperty -InputObject (Get-InspectorObservationProperty -InputObject $sourceObject -Name 'Properties') -Name 'AccountEnabled')
 
         $owners = @(
-            Get-InspectorObservationRelationships `
-                -ObjectInsight $ObjectInsight `
+            Get-InspectorObservationIndexedRelationships `
                 -SourceObjectId $sourceObjectId `
                 -RelationshipType @('OwnedBy')
         )
 
         $ownerEvidenceSucceeded =
-            Test-InspectorObservationSubjectEvidenceSucceeded `
-                -ObjectInsight $ObjectInsight `
+            Test-InspectorObservationIndexedSubjectEvidenceSucceeded `
                 -SubjectObjectType $sourceObjectType `
                 -SubjectObjectId $sourceObjectId `
                 -QueryNamePattern '*Owners*'
@@ -169,7 +353,7 @@ function Invoke-InspectorObservationEngine {
                     -Severity $(if ($sourceObjectType -eq 'ServicePrincipal' -and $publisherClassification -eq 'MicrosoftPublished') { 'Informational' } elseif ($sourceObjectType -eq 'ServicePrincipal' -and $tenantOwnershipClassification -ne 'TenantOwned') { 'Low' } else { 'High' }) `
                     -Confidence 'Medium' `
                     -AffectedObject $affectedObject `
-                    -EvidenceIds (Get-InspectorObservationEvidenceIdsForSubject -ObjectInsight $ObjectInsight -SubjectObjectType $sourceObjectType -SubjectObjectId $sourceObjectId -QueryNamePattern '*Owners*') `
+                    -EvidenceIds (Get-InspectorObservationIndexedEvidenceIdsForSubject -SubjectObjectType $sourceObjectType -SubjectObjectId $sourceObjectId -QueryNamePattern '*Owners*') `
                     -MicrosoftReference $applicationOwnershipReference `
                     -WhyItMatters 'Ownerless applications and service principals can lack operational accountability and timely credential or permission review.' `
                     -Limitations @('This observation depends on owner relationship collection completeness.') `
@@ -494,8 +678,8 @@ function Invoke-InspectorObservationEngine {
                             [PSCustomObject]@{
                                 CredentialType = [string](Get-InspectorObservationProperty -InputObject $_ -Name 'CredentialType')
                                 KeyId = [string](Get-InspectorObservationProperty -InputObject $_ -Name 'KeyId')
-                                StartDateTime = [string](Get-InspectorObservationProperty -InputObject $_ -Name 'StartDateTime')
-                                EndDateTime = [string](Get-InspectorObservationProperty -InputObject $_ -Name 'EndDateTime')
+                                StartDateTime = Get-InspectorObservationCanonicalDateText -Value (Get-InspectorObservationProperty -InputObject $_ -Name 'StartDateTime')
+                                EndDateTime = Get-InspectorObservationCanonicalDateText -Value (Get-InspectorObservationProperty -InputObject $_ -Name 'EndDateTime')
                                 IsActive = $true
                             }
                         })
@@ -562,14 +746,14 @@ function Invoke-InspectorObservationEngine {
                         CredentialA = [PSCustomObject]@{
                             CredentialType = [string](Get-InspectorObservationProperty -InputObject $overlapLeft -Name 'CredentialType')
                             KeyId = [string](Get-InspectorObservationProperty -InputObject $overlapLeft -Name 'KeyId')
-                            StartDateTime = [string](Get-InspectorObservationProperty -InputObject $overlapLeft -Name 'StartDateTime')
-                            EndDateTime = [string](Get-InspectorObservationProperty -InputObject $overlapLeft -Name 'EndDateTime')
+                            StartDateTime = Get-InspectorObservationCanonicalDateText -Value (Get-InspectorObservationProperty -InputObject $overlapLeft -Name 'StartDateTime')
+                            EndDateTime = Get-InspectorObservationCanonicalDateText -Value (Get-InspectorObservationProperty -InputObject $overlapLeft -Name 'EndDateTime')
                         }
                         CredentialB = [PSCustomObject]@{
                             CredentialType = [string](Get-InspectorObservationProperty -InputObject $overlapRight -Name 'CredentialType')
                             KeyId = [string](Get-InspectorObservationProperty -InputObject $overlapRight -Name 'KeyId')
-                            StartDateTime = [string](Get-InspectorObservationProperty -InputObject $overlapRight -Name 'StartDateTime')
-                            EndDateTime = [string](Get-InspectorObservationProperty -InputObject $overlapRight -Name 'EndDateTime')
+                            StartDateTime = Get-InspectorObservationCanonicalDateText -Value (Get-InspectorObservationProperty -InputObject $overlapRight -Name 'StartDateTime')
+                            EndDateTime = Get-InspectorObservationCanonicalDateText -Value (Get-InspectorObservationProperty -InputObject $overlapRight -Name 'EndDateTime')
                         }
                         OverlapStart = $(if ($null -ne $overlapStart) { $overlapStart.ToString('o') } else { $null })
                         OverlapEnd = $(if ($null -ne $overlapEnd) { $overlapEnd.ToString('o') } else { $null })
@@ -724,12 +908,10 @@ function Invoke-InspectorObservationEngine {
         $servicePrincipalObjectId = [string](Get-InspectorObservationProperty -InputObject $applicationIdentity -Name 'ServicePrincipalObjectId')
         $counterpartCollectionQueries = @('Applications', 'ServicePrincipals')
         $counterpartCollectionEvidenceSucceeded =
-            Test-InspectorObservationTenantCollectionEvidenceSucceeded `
-                -ObjectInsight $ObjectInsight `
+            Test-InspectorObservationIndexedTenantCollectionEvidenceSucceeded `
                 -QueryName $counterpartCollectionQueries
         $counterpartCollectionEvidenceIds =
-            Get-InspectorObservationTenantCollectionEvidenceIds `
-                -ObjectInsight $ObjectInsight `
+            Get-InspectorObservationIndexedTenantCollectionEvidenceIds `
                 -QueryName $counterpartCollectionQueries
 
         if (
@@ -920,6 +1102,194 @@ function Invoke-InspectorObservationEngine {
         )
     }
 
+    # Privileged identity context: directory roles, PIM state, AU scope, and risky-user state.
+    foreach ($sourceObject in @($sourceObjects | Where-Object { $_.ObjectType -in @('User', 'Group', 'ServicePrincipal') })) {
+        $sourceObjectId = [string](Get-InspectorObservationProperty -InputObject $sourceObject -Name 'ObjectId')
+        $sourceObjectType = [string](Get-InspectorObservationProperty -InputObject $sourceObject -Name 'ObjectType')
+        $displayName = Get-InspectorObservationDisplayName -InputObject $sourceObject
+        $affectedObject = New-InspectorAffectedObjectFromSourceObject -SourceObject $sourceObject -FallbackObjectType $sourceObjectType -FallbackObjectId $sourceObjectId -FallbackDisplayName $displayName
+
+        $directRoleAssignments = @(
+            Get-InspectorObservationIndexedRelationships `
+                -SourceObjectId $sourceObjectId `
+                -RelationshipType @('AssignedDirectoryRole')
+        )
+        foreach ($roleAssignment in $directRoleAssignments) {
+            $roleName = [string](Get-InspectorObservationMetadataValue -InputObject $roleAssignment -Name 'RoleDisplayName')
+            if ([string]::IsNullOrWhiteSpace($roleName)) { $roleName = [string](Get-InspectorObservationProperty -InputObject $roleAssignment -Name 'TargetDisplayName') }
+            $scopeType = [string](Get-InspectorObservationMetadataValue -InputObject $roleAssignment -Name 'ScopeType')
+            if ([string]::IsNullOrWhiteSpace($scopeType)) { $scopeType = 'Unknown' }
+            $roleEvidenceIds = @(
+                @(Get-InspectorObservationMetadataValue -InputObject $roleAssignment -Name 'EvidenceIds') |
+                    Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }
+            )
+            if ($roleEvidenceIds.Count -eq 0) {
+                $roleEvidenceIds = @([string](Get-InspectorObservationProperty -InputObject $roleAssignment -Name 'EvidenceId'))
+            }
+            $endDateTime = Get-InspectorObservationMetadataValue -InputObject $roleAssignment -Name 'EndDateTime'
+            $durationState = if ($null -eq $endDateTime -or [string]::IsNullOrWhiteSpace([string]$endDateTime)) { 'Permanent' } else { 'TimeBound' }
+            $observations.Add(
+                (New-InspectorSecurityObservation `
+                    -Category 'Users' `
+                    -Title 'Principal has Microsoft Entra directory role assignment' `
+                    -Description "$sourceObjectType '$displayName' has collected Microsoft Entra directory role assignment '$roleName' with $scopeType scope." `
+                    -Severity 'Informational' `
+                    -Confidence 'High' `
+                    -AffectedObject $affectedObject `
+                    -EvidenceIds $roleEvidenceIds `
+                    -MicrosoftReference $privilegedIdentityReference `
+                    -WhyItMatters 'Directory role context explains who has Microsoft Entra administrative privilege and at what scope.' `
+                    -Recommendation 'Review privileged role assignments for necessity, scope, and governance owner accountability.' `
+                    -Metadata @{
+                        SignalDisposition = 'Contextual'
+                        PrincipalType = $sourceObjectType
+                        RoleDefinitionId = [string](Get-InspectorObservationMetadataValue -InputObject $roleAssignment -Name 'RoleDefinitionId')
+                        RoleDisplayName = $roleName
+                        AssignmentId = [string](Get-InspectorObservationMetadataValue -InputObject $roleAssignment -Name 'AssignmentId')
+                        AssignmentState = 'Assigned'
+                        AssignmentType = [string](Get-InspectorObservationMetadataValue -InputObject $roleAssignment -Name 'AssignmentType')
+                        AssignmentSource = [string](Get-InspectorObservationMetadataValue -InputObject $roleAssignment -Name 'AssignmentSource')
+                        ScheduleInstanceId = [string](Get-InspectorObservationMetadataValue -InputObject $roleAssignment -Name 'ScheduleInstanceId')
+                        AssignmentDurationState = $durationState
+                        MemberType = [string](Get-InspectorObservationMetadataValue -InputObject $roleAssignment -Name 'MemberType')
+                        StartDateTime = Get-InspectorObservationMetadataValue -InputObject $roleAssignment -Name 'StartDateTime'
+                        EndDateTime = $endDateTime
+                        DirectoryScopeId = [string](Get-InspectorObservationMetadataValue -InputObject $roleAssignment -Name 'DirectoryScopeId')
+                        ScopeType = $scopeType
+                        AdministrativeUnitId = [string](Get-InspectorObservationMetadataValue -InputObject $roleAssignment -Name 'AdministrativeUnitId')
+                        AdministrativeUnitDisplayName = [string](Get-InspectorObservationMetadataValue -InputObject $roleAssignment -Name 'AdministrativeUnitDisplayName')
+                        RelationshipType = 'AssignedDirectoryRole'
+                    })
+            )
+        }
+
+        foreach ($pimRelationship in @(
+            @(Get-InspectorObservationIndexedRelationships -SourceObjectId $sourceObjectId -RelationshipType @('ActiveDirectoryRoleScheduleInstance')) +
+            @(Get-InspectorObservationIndexedRelationships -SourceObjectId $sourceObjectId -RelationshipType @('EligibleDirectoryRoleScheduleInstance'))
+        )) {
+            $relationshipType = [string](Get-InspectorObservationProperty -InputObject $pimRelationship -Name 'RelationshipType')
+            $assignmentType = [string](Get-InspectorObservationMetadataValue -InputObject $pimRelationship -Name 'AssignmentType')
+            $assignmentState = if ($relationshipType -eq 'ActiveDirectoryRoleScheduleInstance' -and $assignmentType -eq 'Activated') { 'Activated' } elseif ($relationshipType -eq 'ActiveDirectoryRoleScheduleInstance') { 'Active' } else { 'Eligible' }
+            $roleName = [string](Get-InspectorObservationMetadataValue -InputObject $pimRelationship -Name 'RoleDisplayName')
+            $scopeType = [string](Get-InspectorObservationMetadataValue -InputObject $pimRelationship -Name 'ScopeType')
+            $endDateTime = Get-InspectorObservationMetadataValue -InputObject $pimRelationship -Name 'EndDateTime'
+            $durationState = if ($null -eq $endDateTime -or [string]::IsNullOrWhiteSpace([string]$endDateTime)) { 'Permanent' } else { 'TimeBound' }
+            $pimEvidenceIds = @(
+                @(Get-InspectorObservationMetadataValue -InputObject $pimRelationship -Name 'EvidenceIds') |
+                    Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }
+            )
+            if ($pimEvidenceIds.Count -eq 0) {
+                $pimEvidenceIds = @([string](Get-InspectorObservationProperty -InputObject $pimRelationship -Name 'EvidenceId'))
+            }
+            $observations.Add(
+                (New-InspectorSecurityObservation `
+                    -Category 'Users' `
+                    -Title "Principal has $($assignmentState.ToLowerInvariant()) PIM directory role state" `
+                    -Description "$sourceObjectType '$displayName' has $assignmentState PIM directory role state for '$roleName' with $scopeType scope." `
+                    -Severity 'Informational' `
+                    -Confidence 'High' `
+                    -AffectedObject $affectedObject `
+                    -EvidenceIds $pimEvidenceIds `
+                    -MicrosoftReference $privilegedIdentityReference `
+                    -WhyItMatters 'PIM state distinguishes current active privilege from eligibility and explains whether privilege is permanent or time-bound.' `
+                    -Recommendation 'Review active and eligible role state according to least-privilege and just-in-time governance practices.' `
+                    -Metadata @{
+                        SignalDisposition = 'Contextual'
+                        PrincipalType = $sourceObjectType
+                        RoleDefinitionId = [string](Get-InspectorObservationMetadataValue -InputObject $pimRelationship -Name 'RoleDefinitionId')
+                        RoleDisplayName = $roleName
+                        ScheduleInstanceId = [string](Get-InspectorObservationMetadataValue -InputObject $pimRelationship -Name 'ScheduleInstanceId')
+                        AssignmentState = $assignmentState
+                        AssignmentType = $assignmentType
+                        AssignmentDurationState = $durationState
+                        MemberType = [string](Get-InspectorObservationMetadataValue -InputObject $pimRelationship -Name 'MemberType')
+                        StartDateTime = Get-InspectorObservationMetadataValue -InputObject $pimRelationship -Name 'StartDateTime'
+                        EndDateTime = $endDateTime
+                        DirectoryScopeId = [string](Get-InspectorObservationMetadataValue -InputObject $pimRelationship -Name 'DirectoryScopeId')
+                        ScopeType = $scopeType
+                        AdministrativeUnitId = [string](Get-InspectorObservationMetadataValue -InputObject $pimRelationship -Name 'AdministrativeUnitId')
+                        ReconciliationLimitation = [string](Get-InspectorObservationMetadataValue -InputObject $pimRelationship -Name 'ReconciliationLimitation')
+                        RelationshipType = $relationshipType
+                    })
+            )
+        }
+
+        foreach ($auMembership in @(Get-InspectorObservationIndexedRelationships -SourceObjectId $sourceObjectId -RelationshipType @('MemberOfAdministrativeUnit'))) {
+            $auName = [string](Get-InspectorObservationMetadataValue -InputObject $auMembership -Name 'AdministrativeUnitDisplayName')
+            if ([string]::IsNullOrWhiteSpace($auName)) { $auName = [string](Get-InspectorObservationProperty -InputObject $auMembership -Name 'TargetDisplayName') }
+            $observations.Add(
+                (New-InspectorSecurityObservation `
+                    -Category 'Users' `
+                    -Title 'Principal is member of administrative unit' `
+                    -Description "$sourceObjectType '$displayName' is in administrative unit '$auName'." `
+                    -Severity 'Informational' `
+                    -Confidence 'High' `
+                    -AffectedObject $affectedObject `
+                    -EvidenceIds @([string](Get-InspectorObservationProperty -InputObject $auMembership -Name 'EvidenceId')) `
+                    -MicrosoftReference 'Microsoft Graph administrativeUnit members expose users, groups, and devices scoped for delegated administration.' `
+                    -WhyItMatters 'Administrative-unit membership helps explain scoped administrative authority and restricted-management context.' `
+                    -Recommendation 'Review administrative-unit membership when validating scoped privilege.' `
+                    -Metadata @{
+                        SignalDisposition = 'Contextual'
+                        PrincipalType = $sourceObjectType
+                        AdministrativeUnitId = [string](Get-InspectorObservationMetadataValue -InputObject $auMembership -Name 'AdministrativeUnitId')
+                        AdministrativeUnitDisplayName = $auName
+                        AdministrativeUnitVisibility = [string](Get-InspectorObservationMetadataValue -InputObject $auMembership -Name 'AdministrativeUnitVisibility')
+                        AdministrativeUnitRestrictedManagement = Get-InspectorObservationMetadataValue -InputObject $auMembership -Name 'AdministrativeUnitRestrictedManagement'
+                        RelationshipType = 'MemberOfAdministrativeUnit'
+                    })
+            )
+        }
+    }
+
+    foreach ($riskArtifact in @($artifacts | Where-Object { (Get-InspectorObservationProperty -InputObject $_ -Name 'ArtifactType') -eq 'RiskyUserContext' })) {
+        $sourceObjectId = [string](Get-InspectorObservationProperty -InputObject $riskArtifact -Name 'SourceObjectId')
+        $riskSourceObject = Find-InspectorObservationSourceObject -ObjectType 'User' -ObjectId $sourceObjectId
+        $affectedObject = New-InspectorAffectedObjectFromSourceObject -SourceObject $riskSourceObject -FallbackObjectType 'User' -FallbackObjectId $sourceObjectId -FallbackDisplayName $sourceObjectId
+        $riskLevel = [string](Get-InspectorObservationProperty -InputObject $riskArtifact -Name 'RiskLevel')
+        $riskState = [string](Get-InspectorObservationProperty -InputObject $riskArtifact -Name 'RiskState')
+        $isCurrentActionableRiskState = $riskState -in @('atRisk', 'confirmedCompromised')
+        $activePrivilegedEvidence = @(
+            @(Get-InspectorObservationIndexedRelationships -SourceObjectId $sourceObjectId -RelationshipType @('ActiveDirectoryRoleScheduleInstance')) +
+            @(Get-InspectorObservationIndexedRelationships -SourceObjectId $sourceObjectId -RelationshipType @('AssignedDirectoryRole')) |
+                ForEach-Object {
+                    $relationshipEvidenceIds = @(
+                        @(Get-InspectorObservationMetadataValue -InputObject $_ -Name 'EvidenceIds') |
+                            Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }
+                    )
+                    if ($relationshipEvidenceIds.Count -gt 0) { $relationshipEvidenceIds } else { [string](Get-InspectorObservationProperty -InputObject $_ -Name 'EvidenceId') }
+                } |
+                Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } |
+                Select-Object -Unique
+        )
+        $hasActivePrivilege = $activePrivilegedEvidence.Count -gt 0
+        $isPrivilegedRiskFinding = $hasActivePrivilege -and $isCurrentActionableRiskState
+        $observations.Add(
+            (New-InspectorSecurityObservation `
+                -Category 'Users' `
+                -Title $(if ($isPrivilegedRiskFinding) { 'Risky user has active privileged context' } else { 'Risky user context present' }) `
+                -Description "User '$($affectedObject.DisplayName)' has Microsoft Entra ID Protection risk state '$riskState' and risk level '$riskLevel'." `
+                -Severity $(if ($isPrivilegedRiskFinding -and $riskLevel -eq 'high') { 'High' } elseif ($isPrivilegedRiskFinding) { 'Medium' } else { 'Informational' }) `
+                -Confidence 'Medium' `
+                -AffectedObject $affectedObject `
+                -EvidenceIds @(@([string](Get-InspectorObservationProperty -InputObject $riskArtifact -Name 'EvidenceId')) + $activePrivilegedEvidence) `
+                -MicrosoftReference $identityProtectionReference `
+                -WhyItMatters $(if ($hasActivePrivilege) { 'Current user risk on a principal with active directory privilege is a material privileged-identity context that warrants review.' } else { 'Risky-user state helps explain identity risk context without proving compromise by itself.' }) `
+                -Limitations @('Risky-user data is licensing and retention dependent, and does not by itself prove compromise.') `
+                -Recommendation 'Review the user risk state in Microsoft Entra ID Protection and validate whether privileged access remains appropriate.' `
+                -Metadata @{
+                    SignalDisposition = $(if ($isPrivilegedRiskFinding) { 'Actionable' } else { 'Contextual' })
+                    RiskLevel = $riskLevel
+                    RiskState = $riskState
+                    RiskDetail = [string](Get-InspectorObservationProperty -InputObject $riskArtifact -Name 'RiskDetail')
+                    RiskLastUpdatedDateTime = Get-InspectorObservationProperty -InputObject $riskArtifact -Name 'RiskLastUpdatedDateTime'
+                    HasActivePrivilegedContext = [bool]$hasActivePrivilege
+                    CurrentRiskStateActionable = [bool]$isCurrentActionableRiskState
+                    RelationshipType = 'RiskyUserContext'
+                })
+        )
+    }
+
     # Users.
     foreach ($user in @($sourceObjects | Where-Object { $_.ObjectType -eq 'User' })) {
         $userId = [string]$user.ObjectId
@@ -927,8 +1297,7 @@ function Invoke-InspectorObservationEngine {
         $affectedUser = New-InspectorAffectedObject -ObjectType 'User' -ObjectId $userId -DisplayName $displayName -UserPrincipalName ([string](Get-InspectorObservationProperty -InputObject (Get-InspectorObservationProperty -InputObject $user -Name 'Properties') -Name 'UserPrincipalName'))
 
         $userRelationships = @(
-            Get-InspectorObservationRelationships `
-                -ObjectInsight $ObjectInsight `
+            Get-InspectorObservationIndexedRelationships `
                 -SourceObjectId $userId
         )
 
@@ -1043,8 +1412,7 @@ function Invoke-InspectorObservationEngine {
                 -Name 'IsAssignableToRole'
 
         $groupRelationships = @(
-            Get-InspectorObservationRelationships `
-                -ObjectInsight $ObjectInsight `
+            Get-InspectorObservationIndexedRelationships `
                 -SourceObjectId $groupId
         )
 

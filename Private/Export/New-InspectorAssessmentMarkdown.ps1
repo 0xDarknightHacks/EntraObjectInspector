@@ -126,7 +126,17 @@ function New-InspectorAssessmentMarkdown {
     $lines.Add("| Enterprise applications / service principals discovered | $(Get-InspectorExportProperty -InputObject $scopeInventory -Name 'ServicePrincipalsDiscovered') |")
     $lines.Add("| Groups discovered | $(Get-InspectorExportProperty -InputObject $scopeInventory -Name 'GroupsDiscovered') |")
     $lines.Add("| OAuth2 permission grants discovered | $(Get-InspectorExportProperty -InputObject $scopeInventory -Name 'OAuth2PermissionGrantsDiscovered') |")
+    $lines.Add("| Subscribed SKUs discovered (license inventory) | $(Get-InspectorExportProperty -InputObject $scopeInventory -Name 'SubscribedSkusDiscovered') |")
+    $lines.Add("| License inventory status | $(Get-InspectorExportProperty -InputObject $scopeInventory -Name 'LicenseInventoryStatus') |")
+    $lines.Add("| PIM license capability | $(Get-InspectorExportProperty -InputObject $scopeInventory -Name 'PimLicenseCapability') |")
+    $lines.Add("| Identity Protection license capability | $(Get-InspectorExportProperty -InputObject $scopeInventory -Name 'IdentityProtectionLicenseCapability') |")
+    $lines.Add("| Directory role definitions discovered | $(Get-InspectorExportProperty -InputObject $scopeInventory -Name 'DirectoryRoleDefinitionsDiscovered') |")
     $lines.Add("| Directory role assignments discovered | $(Get-InspectorExportProperty -InputObject $scopeInventory -Name 'DirectoryRoleAssignmentsDiscovered') |")
+    $lines.Add("| PIM active role states discovered | $(Get-InspectorExportProperty -InputObject $scopeInventory -Name 'RoleAssignmentScheduleInstancesDiscovered') |")
+    $lines.Add("| PIM eligible role states discovered | $(Get-InspectorExportProperty -InputObject $scopeInventory -Name 'RoleEligibilityScheduleInstancesDiscovered') |")
+    $lines.Add("| Administrative units discovered | $(Get-InspectorExportProperty -InputObject $scopeInventory -Name 'AdministrativeUnitsDiscovered') |")
+    $lines.Add("| Administrative unit members discovered | $(Get-InspectorExportProperty -InputObject $scopeInventory -Name 'AdministrativeUnitMembersDiscovered') |")
+    $lines.Add("| Risky users discovered | $(Get-InspectorExportProperty -InputObject $scopeInventory -Name 'RiskyUsersDiscovered') |")
     $lines.Add("| Evidence records collected | $(Get-InspectorExportProperty -InputObject $scopeInventory -Name 'EvidenceRecordsCollected') |")
     $lines.Add("| Failed objects | $(Get-InspectorExportProperty -InputObject $scopeInventory -Name 'FailedObjects') |")
     $lines.Add('')
@@ -274,4 +284,3 @@ function New-InspectorAssessmentMarkdown {
 
     return ($lines -join [Environment]::NewLine)
 }
-

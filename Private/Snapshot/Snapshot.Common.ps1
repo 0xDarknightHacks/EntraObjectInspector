@@ -106,6 +106,241 @@ function New-InspectorSnapshotCollectionResult {
 }
 
 
+function Get-InspectorTenantLicenseCapabilityProfile {
+    [CmdletBinding()]
+    param (
+        [object[]]$SubscribedSkus = @(),
+
+        [string]$InventoryStatus = 'NotRun',
+
+        [string[]]$InventoryLimitations = @(),
+
+        [switch]$Evaluated
+    )
+
+    # Microsoft-published service-plan identifiers. Use service plans rather than
+    # product display names so bundles such as Microsoft 365 E5 and Business
+    # Premium resolve consistently through /subscribedSkus.
+    $entraP1PlanId = '41781fb2-bc02-4b7c-bd55-b576c07bb09d'
+    $entraP2PlanId = 'eec0eb4f-6444-4f95-aba0-50c24d67f998'
+    $entraGovernancePlanId = 'e866a266-3cff-43a3-acca-0c90a7e00c8b'
+
+    $skuRows = @($SubscribedSkus | Where-Object { $null -ne $_ })
+    $activeSkus = [System.Collections.Generic.List[object]]::new()
+    $activePlanIds = @{}
+
+    foreach ($sku in $skuRows) {
+        $capabilityStatus = [string](Get-InspectorSnapshotProperty -InputObject $sku -Name 'capabilityStatus')
+        if ($capabilityStatus -notin @('Enabled', 'Warning')) {
+            continue
+        }
+
+        $activeSkus.Add($sku)
+
+        foreach ($servicePlan in @(Get-InspectorSnapshotProperty -InputObject $sku -Name 'servicePlans')) {
+            if ($null -eq $servicePlan) { continue }
+
+            $provisioningStatus = [string](Get-InspectorSnapshotProperty -InputObject $servicePlan -Name 'provisioningStatus')
+            if ($provisioningStatus -ne 'Success') {
+                continue
+            }
+
+            $servicePlanId = [string](Get-InspectorSnapshotProperty -InputObject $servicePlan -Name 'servicePlanId')
+            if (-not [string]::IsNullOrWhiteSpace($servicePlanId)) {
+                $activePlanIds[$servicePlanId.ToLowerInvariant()] = $true
+            }
+        }
+    }
+
+    $hasEntraP1 = $activePlanIds.ContainsKey($entraP1PlanId)
+    $hasEntraP2 = $activePlanIds.ContainsKey($entraP2PlanId)
+    $hasEntraGovernance = $activePlanIds.ContainsKey($entraGovernancePlanId)
+    $suiteSkuDetected = @(
+        $activeSkus |
+            Where-Object {
+                [string](Get-InspectorSnapshotProperty -InputObject $_ -Name 'skuPartNumber') -like 'Microsoft_Entra_Suite*'
+            }
+    ).Count -gt 0
+
+    # Do not infer Suite ownership merely because Governance, Internet Access,
+    # and Private Access service plans are all present: those products can be
+    # licensed separately and that combination does not prove ID Protection
+    # entitlement. An explicit active Suite SKU (or P2 independently) is the
+    # fail-closed signal used for Identity Protection capability.
+    $hasEntraSuite = $suiteSkuDetected
+
+    $hasGovernanceEntitlement = $hasEntraGovernance -and ($hasEntraP1 -or $hasEntraP2)
+    $hasSuiteEntitlement = $hasEntraSuite -and ($hasEntraP1 -or $hasEntraP2)
+
+    $inventoryAvailable = $Evaluated -and $InventoryStatus -eq 'Success'
+    # A successful but completely empty inventory is kept inconclusive. This
+    # avoids turning unusual/trial/free-tenant inventory behavior into a false
+    # licensing conclusion; the feature endpoint remains authoritative.
+    $inventoryConclusive = $inventoryAvailable -and $skuRows.Count -gt 0
+
+    $pimStatus =
+        if (-not $Evaluated) { 'Unknown' }
+        elseif (-not $inventoryConclusive) { 'Unknown' }
+        elseif ($hasEntraP2 -or $hasGovernanceEntitlement) { 'Available' }
+        else { 'NotLicensed' }
+
+    $identityProtectionStatus =
+        if (-not $Evaluated) { 'Unknown' }
+        elseif (-not $inventoryConclusive) { 'Unknown' }
+        elseif ($hasEntraP2 -or $hasSuiteEntitlement) { 'Available' }
+        else { 'NotLicensed' }
+
+    $validationStatus =
+        if (-not $Evaluated) { 'Unknown' }
+        elseif (-not $inventoryConclusive) { 'Unknown' }
+        elseif ($pimStatus -eq 'Available' -and $identityProtectionStatus -eq 'Available') { 'Available' }
+        elseif ($pimStatus -eq 'NotLicensed' -and $identityProtectionStatus -eq 'NotLicensed') { 'LimitedByLicense' }
+        else { 'Mixed' }
+
+    $activeSkuPartNumbers = @(
+        $activeSkus |
+            ForEach-Object { [string](Get-InspectorSnapshotProperty -InputObject $_ -Name 'skuPartNumber') } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+            Sort-Object -Unique
+    )
+
+    return [PSCustomObject][ordered]@{
+        PSTypeName              = 'EntraObjectInspector.TenantLicenseCapabilityProfile'
+        ValidationStatus        = $validationStatus
+        InventoryStatus         = $InventoryStatus
+        InventoryPermission     = 'LicenseAssignment.Read.All (least privileged), Directory.Read.All, or Organization.Read.All'
+        InventoryLimitations    = @($InventoryLimitations)
+        ActiveSkuCount          = @($activeSkus).Count
+        ActiveSkuPartNumbers    = @($activeSkuPartNumbers)
+        DetectedPlans           = [PSCustomObject][ordered]@{
+            EntraIdP1             = [bool]$hasEntraP1
+            EntraIdP2             = [bool]$hasEntraP2
+            EntraIdentityGovernance = [bool]$hasEntraGovernance
+            EntraSuite            = [bool]$hasEntraSuite
+        }
+        PrivilegedIdentityManagement = [PSCustomObject][ordered]@{
+            Status      = $pimStatus
+            Requirement = 'Microsoft Entra ID P2 or Microsoft Entra ID Governance. Microsoft Entra Suite includes Microsoft Entra ID Governance.'
+            Basis        = 'Tenant subscribed SKU capability/service-plan inventory; feature endpoint evidence remains authoritative when inventory is unavailable or inconclusive.'
+        }
+        IdentityProtectionRiskyUsers = [PSCustomObject][ordered]@{
+            Status      = $identityProtectionStatus
+            Requirement = 'Microsoft Entra ID P2 or Microsoft Entra Suite for full Microsoft Entra ID Protection risky-user access.'
+            Basis        = 'Tenant subscribed SKU capability/service-plan inventory; feature endpoint evidence remains authoritative when inventory is unavailable or inconclusive.'
+        }
+        ComplianceScope = 'Capability-level tenant entitlement signal only. This does not validate per-user seat assignment, license quantity, or Microsoft licensing compliance.'
+    }
+}
+
+function Resolve-InspectorTenantCapabilities {
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory)]
+        [Alias('TenantSnapshot','InputObject')]
+        [object]$Snapshot
+    )
+
+    # Portable snapshots created after tenant-license capability validation was
+    # introduced already carry the computed profile. Preserve that serialized
+    # result verbatim so offline replay cannot reinterpret licensing differently
+    # from the live collection run.
+    $tenantMetadata = Get-InspectorSnapshotProperty -InputObject $Snapshot -Name 'TenantMetadata'
+    $existingProfile = Get-InspectorSnapshotProperty -InputObject $tenantMetadata -Name 'LicenseValidation'
+    if ($null -ne $existingProfile) {
+        return $existingProfile
+    }
+
+    # Historical snapshots do not contain TenantMetadata.LicenseValidation.
+    # Reconstruct only from evidence already present in the portable payload;
+    # never call Graph during import. Missing legacy inventory remains Unknown,
+    # not NotLicensed, so older snapshots fail closed without inventing a tenant
+    # entitlement conclusion.
+    $collections = Get-InspectorSnapshotProperty -InputObject $Snapshot -Name 'Collections'
+    $collectionSummary = Get-InspectorSnapshotProperty -InputObject $Snapshot -Name 'CollectionSummary'
+    $subscribedSkus = @(
+        Get-InspectorSnapshotProperty -InputObject $collections -Name 'SubscribedSkus' |
+            Where-Object { $null -ne $_ }
+    )
+
+    $skuSummary = Get-InspectorSnapshotProperty -InputObject $collectionSummary -Name 'SubscribedSkus'
+    $inventoryStatus = [string](Get-InspectorSnapshotProperty -InputObject $skuSummary -Name 'Status')
+    $inventoryLimitations = @(
+        Get-InspectorSnapshotProperty -InputObject $skuSummary -Name 'Limitations' |
+            Where-Object { $null -ne $_ } |
+            ForEach-Object { [string]$_ }
+    )
+
+    $evaluated = $false
+    if (-not [string]::IsNullOrWhiteSpace($inventoryStatus) -and $inventoryStatus -ne 'NotRun') {
+        $evaluated = $true
+    }
+    elseif ($subscribedSkus.Count -gt 0) {
+        # A historical/custom snapshot may contain SKU rows without a summary.
+        # Treat the inventory as successfully available in that narrow case.
+        $inventoryStatus = 'Success'
+        $evaluated = $true
+    }
+    else {
+        $inventoryStatus = 'NotRun'
+    }
+
+    return Get-InspectorTenantLicenseCapabilityProfile `
+        -SubscribedSkus @($subscribedSkus) `
+        -InventoryStatus $inventoryStatus `
+        -InventoryLimitations @($inventoryLimitations) `
+        -Evaluated:$evaluated
+}
+
+function New-InspectorSnapshotLicenseUnavailableCollectionResult {
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory)]
+        [string]$Name,
+
+        [Parameter(Mandatory)]
+        [string]$Uri,
+
+        [Parameter(Mandatory)]
+        [string]$RequiredPermission,
+
+        [Parameter(Mandatory)]
+        [string]$CapabilityName,
+
+        [Parameter(Mandatory)]
+        [string]$LicenseRequirement
+    )
+
+    $limitation =
+        "Tenant collection '$Name' was not attempted because license capability validation found no active qualifying tenant subscription for $CapabilityName. Required licensing: $LicenseRequirement The assessment remains fail-closed for this capability; this tenant-level check does not validate per-user licensing compliance."
+
+    $graphResult = [PSCustomObject][ordered]@{
+        SourceEndpoint      = $Uri
+        RequiredPermission  = $RequiredPermission
+        CollectionTime      = (Get-Date).ToUniversalTime().ToString('o')
+        Status              = 'LicenseUnavailable'
+        ObservedValue       = @()
+        Limitations         = @($limitation)
+    }
+
+    $evidence =
+        New-InspectorSnapshotEvidence `
+            -QueryName $Name `
+            -GraphResult $graphResult
+
+    $evidence | Add-Member -NotePropertyName 'Completeness' -NotePropertyValue 'Partial' -Force
+    $evidence | Add-Member -NotePropertyName 'SourceResultCount' -NotePropertyValue 0 -Force
+    $evidence | Add-Member -NotePropertyName 'LimitationCategory' -NotePropertyValue 'Licensing' -Force
+    $evidence | Add-Member -NotePropertyName 'LicenseRequirement' -NotePropertyValue $LicenseRequirement -Force
+
+    return [PSCustomObject][ordered]@{
+        Name        = $Name
+        Status      = 'LicenseUnavailable'
+        Items       = @()
+        Evidence    = $evidence
+        Limitations = @($limitation)
+    }
+}
+
 function New-InspectorSnapshotBatchCollectionResults {
     [CmdletBinding()]
     param (
@@ -421,9 +656,11 @@ function Test-InspectorSnapshotRequiredEvidence {
         return $false
     }
 
-    # /organization is report metadata support. All other executed snapshot
-    # collections feed assessment semantics or prove the completeness of a
-    # negative-state conclusion and are therefore release-required evidence.
+    # /organization is report metadata support. Other evidence explicitly
+    # marked RequiredForCoverage=$false (for example /subscribedSkus license
+    # prevalidation) is advisory. All remaining executed snapshot collections
+    # feed assessment semantics or prove negative-state completeness and are
+    # therefore release-required evidence.
     return $queryName -ne 'Organization'
 }
 
@@ -468,7 +705,12 @@ function Get-InspectorSnapshotExpectedEvidencePlan {
         'Users',
         'Groups',
         'OAuth2PermissionGrants',
-        'DirectoryRoleAssignments'
+        'DirectoryRoleDefinitions',
+        'DirectoryRoleAssignments',
+        'RoleAssignmentScheduleInstances',
+        'RoleEligibilityScheduleInstances',
+        'AdministrativeUnits',
+        'RiskyUsers'
     )) {
         $summaryRow = Get-InspectorSnapshotProperty -InputObject $CollectionSummary -Name $baseQuery
         $status = [string](Get-InspectorSnapshotProperty -InputObject $summaryRow -Name 'Status')
@@ -541,6 +783,15 @@ function Get-InspectorSnapshotExpectedEvidencePlan {
             Sort-Object -Unique
     )) {
         Add-ExpectedEvidenceQuery -QueryName "UserTransitiveMemberships:$id"
+    }
+
+    foreach ($id in @(
+        (Get-InspectorSnapshotProperty -InputObject $Collections -Name 'AdministrativeUnits') |
+            ForEach-Object { [string](Get-InspectorSnapshotProperty -InputObject $_ -Name 'id') } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+            Sort-Object -Unique
+    )) {
+        Add-ExpectedEvidenceQuery -QueryName "AdministrativeUnitMembers:$id"
     }
 
     return [PSCustomObject][ordered]@{

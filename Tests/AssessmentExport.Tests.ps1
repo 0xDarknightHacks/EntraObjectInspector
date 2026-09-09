@@ -94,6 +94,7 @@ Describe 'assessment export layer' {
                                 QueryName = 'DiscoverApplications'
                                 Endpoint = 'https://graph.microsoft.com/v1.0/applications'
                                 RequiredPermission = 'Application.Read.All'
+                                RequiredForCoverage = $false
                                 CollectionTime = '2026-08-30T10:00:00Z'
                                 Status = 'Success'
                                 ResultCount = 1
@@ -168,6 +169,7 @@ Describe 'assessment export layer' {
             $model.SecurityObservationRows.Count | Should -Be 1
             $model.ObjectIndexRows.Count | Should -Be 1
             $model.EvidenceRows.Count | Should -Be 2
+            (@($model.EvidenceRows | Where-Object QueryName -eq 'DiscoverApplications')[0].RequiredForCoverage) | Should -BeFalse
 
             $tenant | Add-Member -NotePropertyName GraphCallsAfterSnapshot -NotePropertyValue 0 -Force
             $measuredModel =
@@ -250,6 +252,11 @@ Describe 'assessment export layer' {
                 Test-Path -LiteralPath $artifactPath -PathType Leaf | Should -BeTrue
                 $artifact.SizeBytes | Should -Be (Get-Item -LiteralPath $artifactPath).Length
             }
+
+            $evidenceIndex = @(Get-Content -LiteralPath (Join-Path $result.ExportDirectory 'evidence-index.json') -Raw | ConvertFrom-Json)
+            $advisoryEvidence = @($evidenceIndex | Where-Object QueryName -eq 'DiscoverApplications')[0]
+            $advisoryEvidence.PSObject.Properties.Name | Should -Contain 'RequiredForCoverage'
+            $advisoryEvidence.RequiredForCoverage | Should -BeFalse
         }
 
         It 'hydrates Markdown artifact inventory from the finalized manifest' {

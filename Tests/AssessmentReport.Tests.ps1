@@ -351,6 +351,29 @@ Describe 'HTML assessment report generator' {
             $result.Status | Should -Be 'Failed'
             $result.ReleaseEligible | Should -BeFalse
             $result.Errors.ErrorId | Should -Contain 'PKG-EVIDENCE-COVERAGE-001'
+
+            # Advisory evidence is exported for provenance but is deliberately
+            # excluded from the required evidence plan. A failed optional
+            # /subscribedSkus license-inventory probe must therefore not create
+            # a false PKG-EVIDENCE-COVERAGE/PLAN failure.
+            $manifest.EvidenceRecordCount = 2
+            $advisoryEvidenceRows = @(
+                [PSCustomObject]@{ EvidenceId = 'ev-1'; QueryName = 'ApplicationOwners'; Status = 'Success'; Completeness = 'Complete' },
+                [PSCustomObject]@{ EvidenceId = 'ev-license'; QueryName = 'SubscribedSkus'; Status = 'InsufficientPermission'; Completeness = 'Partial'; RequiredForCoverage = $false }
+            )
+            $advisoryResult = Test-InspectorReportPackageConsistency -Summary $summary -SecurityObservations @((New-TestObservation)) -EvidenceRows $advisoryEvidenceRows -AssessmentFindings @() -FailedObjects @() -Manifest $manifest
+            $advisoryResult.Status | Should -Be 'Success'
+            $advisoryResult.ReleaseEligible | Should -BeTrue
+            @($advisoryResult.Errors).ErrorId | Should -Not -Contain 'PKG-EVIDENCE-COVERAGE-001'
+            @($advisoryResult.Errors).ErrorId | Should -Not -Contain 'PKG-EVIDENCE-PLAN-001'
+
+            # Malformed advisory metadata cannot be trusted to shrink the
+            # denominator; package validation must fail closed instead.
+            $malformedAdvisory = $advisoryEvidenceRows[1].PSObject.Copy()
+            $malformedAdvisory.RequiredForCoverage = 'invalid'
+            $malformedResult = Test-InspectorReportPackageConsistency -Summary $summary -SecurityObservations @((New-TestObservation)) -EvidenceRows @($advisoryEvidenceRows[0], $malformedAdvisory) -AssessmentFindings @() -FailedObjects @() -Manifest $manifest
+            $malformedResult.ReleaseEligible | Should -BeFalse
+            @($malformedResult.Errors).ErrorId | Should -Contain 'PKG-EVIDENCE-PLAN-001'
         }
 
         It 'requires current scope completeness to be exactly Complete' {

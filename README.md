@@ -12,6 +12,7 @@ The tool supports:
 - Service principals / enterprise applications
 - Correlated application identities
 - Ownership, membership, permission, and app-role relationship evidence
+- Privileged identity context for directory role assignments, current PIM role state, Administrative Unit scope, and risky-user state
 - Tenant-wide assessment
 - JSON, CSV, Markdown, and static HTML reporting
 
@@ -45,8 +46,27 @@ Permissions depend on the objects and relationships being assessed. The collecti
 - `Member.Read.Hidden` when hidden group membership is in scope
 - `Directory.Read.All`
 - `RoleManagement.Read.Directory`
+- `RoleAssignmentSchedule.Read.Directory` for current active PIM directory-role schedule instances
+- `RoleEligibilitySchedule.Read.Directory` for current eligible PIM directory-role schedule instances
+- `AdministrativeUnit.Read.All` for Administrative Unit scope and membership context
+- `IdentityRiskyUser.Read.All` for Microsoft Entra ID Protection risky-user context
 
-`Organization.Read.All` is optional and is used only for organization metadata in reports.
+`Organization.Read.All` is optional. It is used for organization metadata and, when granted, also authorizes the optional `/subscribedSkus` tenant-license capability inventory. The project's existing `Directory.Read.All` permission also authorizes `/subscribedSkus`; therefore a normal full assessment does not need an additional license-inventory permission. For a reduced permission set that has neither `Directory.Read.All` nor `Organization.Read.All`, `LicenseAssignment.Read.All` is the least-privileged standalone permission for `/subscribedSkus`. License inventory evidence is advisory and is not itself required for assessment coverage.
+
+`Member.Read.Hidden` remains optional. Without it, hidden group or HiddenMembership Administrative Unit membership is marked partial and the assessment fails closed for membership completeness rather than treating inaccessible membership as empty.
+
+### Tenant license capability validation
+
+Tenant-wide assessments optionally read Microsoft Graph `/subscribedSkus` before collecting licensed privileged-identity domains. The check is capability-aware rather than a blanket "P2 tenant" requirement:
+
+- PIM current active/eligible schedule-instance collection requires a valid Microsoft Entra ID P2 entitlement **or** Microsoft Entra ID Governance. Microsoft Entra Suite includes ID Governance.
+- Full Microsoft Entra ID Protection risky-user Graph access requires Microsoft Entra ID P2 **or** Microsoft Entra Suite.
+- Microsoft 365 Business Premium includes Microsoft Entra ID P1; Business Premium alone therefore does not satisfy either capability. Add-on products can change that result, so the collector evaluates provisioned service-plan identifiers rather than product display names.
+- Directory role definitions/assignments and Administrative Unit collection are not blanket-gated by this PIM/Identity Protection license check.
+
+When license inventory conclusively shows that a required capability is unavailable, the corresponding PIM or risky-user request is not sent. Its evidence is recorded as `LicenseUnavailable / Partial`, the limitation is explicit, and release eligibility remains false rather than treating the inaccessible domain as a successful empty collection. If `/subscribedSkus` cannot be read, license prevalidation remains `Unknown`; the feature endpoints are still attempted and their evidence remains authoritative.
+
+This is a **tenant capability** check only. It does not validate per-user seat assignment, license quantity, or Microsoft licensing compliance.
 
 Use the least-privilege permission set appropriate for the intended assessment scope.
 
@@ -121,6 +141,10 @@ The command performs authentication, snapshot collection, tenant inspection, ass
 
 ### Focused workflows
 
+Use the workflow in this order when you need repeatable evidence: connect, collect
+or save a snapshot, inspect offline, compare snapshots, apply baselines or rule
+packs, then export and report.
+
 Save a portable snapshot during a live assessment, then re-analyze it later without Graph collection:
 
 ```powershell
@@ -158,6 +182,37 @@ Invoke-EntraSecurityAssessment `
 ```
 
 Interactive completion output and report telemetry distinguish tenant-wide, targeted, and portable-offline execution. Runtime telemetry includes stage timings, offline objects/second, logical versus physical Graph requests, batching efficiency, the OS process high-water mark, a run-observed sampled working-set peak, and an exact run peak when the process high-water mark advances during that assessment. `GraphCallsAfterSnapshot` remains the post-snapshot boundary check.
+
+`Complete` evidence means the required collector succeeded for the stated scope.
+`Partial` or failed evidence is retained in exports and reports and should be
+treated as a boundary on what the assessment can safely infer. Ownerless,
+missing-counterpart, and similar negative observations are emitted only when
+the relevant collection completed successfully.
+
+Privileged identity context is collected during snapshot creation and processed
+offline. It uses Microsoft Graph v1.0 role definitions, unified role assignments,
+active and eligible PIM schedule instances, Administrative Units, AU membership,
+and risky users. Unified role assignments remain the canonical source for
+AU-scoped role assignments through `directoryScopeId =
+/administrativeUnits/{id}`; `scopedRoleMembers` is not requested for new
+snapshots.
+
+Active PIM schedule instances are reconciled with unified role assignments so
+the same effective privilege is not counted twice. `Assigned` means active
+assigned privilege; `Activated` means an eligible assignment is currently active.
+Privileged risky-user findings require active privileged context plus
+`riskState` of `atRisk` or `confirmedCompromised`. Resolved, safe, none, and
+unknown future states remain contextual. Risk detections are intentionally not
+collected in this release pass because risky-user state is sufficient for the
+current privilege/risk correlation and detection records are retention-bound and
+more volatile.
+
+### Deferred object-depth candidates
+
+Identity Protection risk detections are a plausible future evidence enrichment
+candidate when operators need event-level explainability for risky-user state.
+They are deferred here to avoid noisy drift and additional permission scope
+until the event-level data is required by a specific observation.
 
 ## Preview
 
@@ -262,7 +317,7 @@ Run the full Pester suite:
 Invoke-Pester -Path .\Tests -Output Detailed
 ```
 
-The current release baseline contains **307 tests** and requires **307 passed / 0 failed / 0 skipped**.
+The current release baseline contains **332 tests** and requires **332 passed / 0 failed / 0 skipped**.
 
 For a broader local validation:
 

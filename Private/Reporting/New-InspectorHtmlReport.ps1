@@ -484,6 +484,7 @@ function New-InspectorHtmlReport {
         New-InspectorClientTenantDetailsHtml -ReportModel $ReportModel
         New-InspectorScopeStatementHtml -ReportModel $ReportModel
         New-InspectorScopeInventoryHtml -ReportModel $ReportModel
+        New-InspectorTenantCapabilitiesHtml -ReportModel $ReportModel
         New-InspectorExecutiveSummaryHtml -ReportModel $ReportModel
         New-InspectorAssessmentAccountingHtml -ReportModel $ReportModel
         New-InspectorSeverityMethodologyHtml -ReportModel $ReportModel

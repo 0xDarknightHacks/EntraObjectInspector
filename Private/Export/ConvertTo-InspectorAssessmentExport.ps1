@@ -297,6 +297,23 @@ function ConvertTo-InspectorFlatEvidence {
         CollectorName        = ConvertTo-InspectorExportString (Get-InspectorExportProperty -InputObject $Evidence -Name 'CollectorName')
         Endpoint             = ConvertTo-InspectorExportString (Get-InspectorExportProperty -InputObject $Evidence -Name 'Endpoint')
         RequiredPermission   = ConvertTo-InspectorExportString (Get-InspectorExportProperty -InputObject $Evidence -Name 'RequiredPermission')
+        RequiredForCoverage  = $(
+            $requiredForCoverage = Get-InspectorExportProperty -InputObject $Evidence -Name 'RequiredForCoverage'
+            if ($null -eq $requiredForCoverage) {
+                $null
+            }
+            else {
+                try {
+                    [System.Convert]::ToBoolean($requiredForCoverage)
+                }
+                catch {
+                    # Invalid/malformed values are not trusted as an advisory
+                    # opt-out. Emit null so downstream validation treats the
+                    # row as assessment-required (fail-closed).
+                    $null
+                }
+            }
+        )
         CollectionTime       = ConvertTo-InspectorExportString (Get-InspectorExportProperty -InputObject $Evidence -Name 'CollectionTime')
         Status               = ConvertTo-InspectorExportString (Get-InspectorExportProperty -InputObject $Evidence -Name 'Status')
         ResultCount          = ConvertTo-InspectorExportString (Get-InspectorExportProperty -InputObject $Evidence -Name 'ResultCount')
@@ -732,6 +749,25 @@ function ConvertTo-InspectorAssessmentExport {
                 -Name 'ScopeInventory'
     }
 
+    $tenantCapabilities =
+        Get-InspectorExportProperty `
+            -InputObject $InputObject `
+            -Name 'TenantCapabilities'
+
+    if ($null -eq $tenantCapabilities) {
+        $tenantCapabilities =
+            Get-InspectorExportProperty `
+                -InputObject $summary `
+                -Name 'TenantCapabilities'
+    }
+
+    if ($null -eq $tenantCapabilities) {
+        $tenantCapabilities =
+            Get-InspectorExportProperty `
+                -InputObject $discovery `
+                -Name 'TenantCapabilities'
+    }
+
     $observationsFlat =
         @(
             $securityObservations |
@@ -1109,6 +1145,7 @@ function ConvertTo-InspectorAssessmentExport {
             TenantDisplayName              = $tenantDisplayName
             ModuleVersion                  = $moduleVersion
             ScopeInventory                 = $scopeInventory
+            TenantCapabilities             = $tenantCapabilities
             AssessmentCoverage             = $assessmentCoverage
             Artifacts                      = @()
             RecommendationCount            = @($assessmentRecommendations).Count
@@ -1130,6 +1167,7 @@ function ConvertTo-InspectorAssessmentExport {
             TenantMetadata            = $tenantMetadata
             ModuleVersion             = $moduleVersion
             ScopeInventory            = $scopeInventory
+            TenantCapabilities         = $tenantCapabilities
             AssessmentCoverage        = $assessmentCoverage
             DiscoveredCount           = Get-InspectorExportProperty -InputObject $summary -Name 'DiscoveredCount'
             ProcessedCount            = Get-InspectorExportProperty -InputObject $summary -Name 'ProcessedCount'

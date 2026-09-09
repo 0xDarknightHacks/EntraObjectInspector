@@ -85,6 +85,7 @@ Describe 'tenant discovery' {
             $result.DiscoveredObjects[0].ObjectKey | Should -Be 'Application:app-object-1'
             $result.DiscoveredObjects[0].InspectionIdentity | Should -Be 'app-object-1'
             $result.Evidence[0].RequiredPermission | Should -Be 'Application.Read.All'
+            Should -Invoke Invoke-InspectorGraphRequest -ParameterFilter { $Uri -eq 'https://graph.microsoft.com/v1.0/applications?$select=id,appId,displayName&$top=999' } -Times 1 -Exactly
         }
 
         It 'discovers users using UPN as inspection identity when available' {
@@ -113,6 +114,7 @@ Describe 'tenant discovery' {
                 'ServicePrincipal',
                 'User'
             )
+            Should -Invoke Invoke-InspectorGraphRequest -ParameterFilter { $Uri -eq 'https://graph.microsoft.com/v1.0/servicePrincipals?$select=id,appId,displayName,servicePrincipalType&$top=100' } -Times 1 -Exactly
         }
 
         It 'respects MaxObjectsPerType' {

@@ -113,7 +113,7 @@ function Get-InspectorTargetedTenantCollections {
         foreach ($field in @('clientId','resourceId')) {
             $queryName = "OAuth2PermissionGrants:${field}:$id"
             $filter = [uri]::EscapeDataString("$field eq '$id'")
-            $result = New-InspectorSnapshotCollectionResult -Name $queryName -Uri "$graphBaseUri/oauth2PermissionGrants?`$select=id,clientId,resourceId,principalId,consentType,scope&`$filter=$filter&`$top=999" -RequiredPermission 'Directory.Read.All' -EvidenceScope 'TargetedTenantCollection' -SubjectObjectType 'ServicePrincipal' -SubjectObjectId $id -RuntimeTelemetry $RuntimeTelemetry
+            $result = New-InspectorSnapshotCollectionResult -Name $queryName -Uri "$graphBaseUri/oauth2PermissionGrants?`$filter=$filter" -RequiredPermission 'Directory.Read.All' -EvidenceScope 'TargetedTenantCollection' -SubjectObjectType 'ServicePrincipal' -SubjectObjectId $id -RuntimeTelemetry $RuntimeTelemetry
             $result.Evidence | Add-Member -NotePropertyName 'RequiredForCoverage' -NotePropertyValue $true -Force
             $evidence.Add($result.Evidence); $grantQueries.Add($queryName)
             foreach ($grant in @($result.Items)) {
@@ -130,7 +130,7 @@ function Get-InspectorTargetedTenantCollections {
         if ([string]::IsNullOrWhiteSpace($id)) { continue }
         $queryName = "DirectoryRoleAssignments:principalId:$id"
         $filter = [uri]::EscapeDataString("principalId eq '$id'")
-        $result = New-InspectorSnapshotCollectionResult -Name $queryName -Uri "$graphBaseUri/roleManagement/directory/roleAssignments?`$filter=$filter&`$expand=roleDefinition&`$top=999" -RequiredPermission 'RoleManagement.Read.Directory' -EvidenceScope 'TargetedTenantCollection' -SubjectObjectId $id -RuntimeTelemetry $RuntimeTelemetry
+        $result = New-InspectorSnapshotCollectionResult -Name $queryName -Uri "$graphBaseUri/roleManagement/directory/roleAssignments?`$filter=$filter&`$expand=roleDefinition" -RequiredPermission 'RoleManagement.Read.Directory' -EvidenceScope 'TargetedTenantCollection' -SubjectObjectId $id -RuntimeTelemetry $RuntimeTelemetry
         $result.Evidence | Add-Member -NotePropertyName 'RequiredForCoverage' -NotePropertyValue $true -Force
         $evidence.Add($result.Evidence); $roleQueries.Add($queryName)
         foreach ($role in @($result.Items)) {

@@ -414,6 +414,19 @@ function Import-InspectorTenantSnapshot {
     }
 
     $collections = Get-InspectorSnapshotProperty -InputObject $snapshot -Name 'Collections'
+
+    $tenantMetadata = Get-InspectorSnapshotProperty -InputObject $snapshot -Name 'TenantMetadata'
+    if ($null -eq $tenantMetadata) {
+        $tenantMetadata = [PSCustomObject][ordered]@{}
+        $snapshot | Add-Member -NotePropertyName 'TenantMetadata' -NotePropertyValue $tenantMetadata -Force
+    }
+
+    $licenseValidation = Get-InspectorSnapshotProperty -InputObject $tenantMetadata -Name 'LicenseValidation'
+    if ($null -eq $licenseValidation) {
+        $licenseValidation = Resolve-InspectorTenantCapabilities -Snapshot $snapshot
+        $tenantMetadata | Add-Member -NotePropertyName 'LicenseValidation' -NotePropertyValue $licenseValidation -Force
+    }
+
     $indexes = New-InspectorTenantSnapshotIndexes -Collections $collections -Evidence @($snapshot.Evidence)
     $snapshot | Add-Member -NotePropertyName 'Indexes' -NotePropertyValue $indexes -Force
     $snapshot | Add-Member -NotePropertyName 'PersistenceMode' -NotePropertyValue 'PortableJsonImported' -Force

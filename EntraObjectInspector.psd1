@@ -1,7 +1,7 @@
 @{
     RootModule = 'EntraObjectInspector.psm1'
 
-    ModuleVersion = '1.0.1'
+    ModuleVersion = '1.0.2'
 
     GUID = '3c8c54d6-218b-4a51-a3c7-41f908e6fd79'
 

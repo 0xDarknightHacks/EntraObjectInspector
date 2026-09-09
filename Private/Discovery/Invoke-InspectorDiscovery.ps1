@@ -18,7 +18,7 @@ function Invoke-InspectorObjectDiscovery {
         }
         ServicePrincipal = @{
             QueryName = 'DiscoverServicePrincipals'
-            Uri = "$graphBaseUri/servicePrincipals?`$select=id,appId,displayName,servicePrincipalType&`$top=999"
+            Uri = "$graphBaseUri/servicePrincipals?`$select=id,appId,displayName,servicePrincipalType&`$top=100"
             RequiredPermission = 'Application.Read.All'
         }
         User = @{

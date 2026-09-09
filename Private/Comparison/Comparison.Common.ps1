@@ -311,6 +311,121 @@ function ConvertTo-InspectorSnapshotComparableRecords {
         }
     }
 
+    $roleAssignmentIds = @{}
+    $roleAssignmentTupleKeys = @{}
+    foreach ($assignment in @(Get-InspectorSnapshotProperty -InputObject $collections -Name 'DirectoryRoleAssignments')) {
+        $principalId = [string](Get-InspectorSnapshotProperty -InputObject $assignment -Name 'principalId')
+        $roleDefinitionId = [string](Get-InspectorSnapshotProperty -InputObject $assignment -Name 'roleDefinitionId')
+        $directoryScopeId = [string](Get-InspectorSnapshotProperty -InputObject $assignment -Name 'directoryScopeId')
+        $appScopeId = [string](Get-InspectorSnapshotProperty -InputObject $assignment -Name 'appScopeId')
+        if ([string]::IsNullOrWhiteSpace($principalId) -or [string]::IsNullOrWhiteSpace($roleDefinitionId)) { continue }
+        $assignmentId = [string](Get-InspectorSnapshotProperty -InputObject $assignment -Name 'id')
+        if (-not [string]::IsNullOrWhiteSpace($assignmentId)) { $roleAssignmentIds[$assignmentId] = $true }
+        $directoryScopeKey = if ([string]::IsNullOrWhiteSpace($directoryScopeId)) { '<null>' } else { $directoryScopeId }
+        $appScopeKey = if ([string]::IsNullOrWhiteSpace($appScopeId)) { '<null>' } else { $appScopeId }
+        $scopeKey = "$directoryScopeKey|$appScopeKey"
+        $roleAssignmentTupleKeys["$principalId|$roleDefinitionId|$scopeKey"] = $true
+        $key = "DirectoryRoleAssignment|$principalId|$roleDefinitionId|$scopeKey"
+        Add-InspectorComparableRecord -Record (New-InspectorComparableRecord `
+            -RecordType 'DirectoryRoleAssignment' `
+            -SemanticKey $key `
+            -SubjectObjectType 'Principal' `
+            -SubjectObjectId $principalId `
+            -RelatedObjectId $roleDefinitionId `
+            -Value ([PSCustomObject][ordered]@{
+                PrincipalId = $principalId
+                RoleDefinitionId = $roleDefinitionId
+                DirectoryScopeId = $directoryScopeId
+                AppScopeId = $appScopeId
+            }) `
+            -EvidenceIds @([string](Get-InspectorSnapshotProperty -InputObject $assignment -Name 'EvidenceId')))
+    }
+
+    foreach ($definition in @(
+        @{ Collection = 'RoleAssignmentScheduleInstances'; RecordType = 'ActiveDirectoryRoleScheduleInstance'; State = 'Active' },
+        @{ Collection = 'RoleEligibilityScheduleInstances'; RecordType = 'EligibleDirectoryRoleScheduleInstance'; State = 'Eligible' }
+    )) {
+        foreach ($scheduleInstance in @(Get-InspectorSnapshotProperty -InputObject $collections -Name $definition.Collection)) {
+            $principalId = [string](Get-InspectorSnapshotProperty -InputObject $scheduleInstance -Name 'principalId')
+            $roleDefinitionId = [string](Get-InspectorSnapshotProperty -InputObject $scheduleInstance -Name 'roleDefinitionId')
+            $directoryScopeId = [string](Get-InspectorSnapshotProperty -InputObject $scheduleInstance -Name 'directoryScopeId')
+            $appScopeId = [string](Get-InspectorSnapshotProperty -InputObject $scheduleInstance -Name 'appScopeId')
+            $scheduleId = [string](Get-InspectorSnapshotProperty -InputObject $scheduleInstance -Name 'id')
+            if ([string]::IsNullOrWhiteSpace($principalId) -or [string]::IsNullOrWhiteSpace($roleDefinitionId)) { continue }
+            $directoryScopeKey = if ([string]::IsNullOrWhiteSpace($directoryScopeId)) { '<null>' } else { $directoryScopeId }
+            $appScopeKey = if ([string]::IsNullOrWhiteSpace($appScopeId)) { '<null>' } else { $appScopeId }
+            $scopeKey = "$directoryScopeKey|$appScopeKey"
+            $originId = [string](Get-InspectorSnapshotProperty -InputObject $scheduleInstance -Name 'roleAssignmentOriginId')
+            $tupleKey = "$principalId|$roleDefinitionId|$scopeKey"
+            $assignmentType = [string](Get-InspectorSnapshotProperty -InputObject $scheduleInstance -Name 'assignmentType')
+            if (
+                $definition.Collection -eq 'RoleAssignmentScheduleInstances' -and
+                $assignmentType -eq 'Assigned' -and
+                (
+                    (-not [string]::IsNullOrWhiteSpace($originId) -and $roleAssignmentIds.ContainsKey($originId)) -or
+                    $roleAssignmentTupleKeys.ContainsKey($tupleKey)
+                )
+            ) {
+                # Assigned schedule instances corroborate an effective unified
+                # role assignment and must not create a second semantic drift
+                # record. Activated instances represent active PIM state and are
+                # intentionally retained even when Graph also exposes the
+                # resulting unifiedRoleAssignment.
+                continue
+            }
+            $key = "$($definition.RecordType)|$principalId|$roleDefinitionId|$scopeKey|$scheduleId"
+            Add-InspectorComparableRecord -Record (New-InspectorComparableRecord `
+                -RecordType $definition.RecordType `
+                -SemanticKey $key `
+                -SubjectObjectType 'Principal' `
+                -SubjectObjectId $principalId `
+                -RelatedObjectId $roleDefinitionId `
+                -Value ([PSCustomObject][ordered]@{
+                    PrincipalId = $principalId
+                    RoleDefinitionId = $roleDefinitionId
+                    DirectoryScopeId = $directoryScopeId
+                    AppScopeId = $appScopeId
+                    AssignmentState = $definition.State
+                    AssignmentType = $assignmentType
+                    MemberType = [string](Get-InspectorSnapshotProperty -InputObject $scheduleInstance -Name 'memberType')
+                }) `
+                -EvidenceIds @([string](Get-InspectorSnapshotProperty -InputObject $scheduleInstance -Name 'EvidenceId')))
+        }
+    }
+
+    foreach ($auMemberRow in @(Get-InspectorSnapshotProperty -InputObject $collections -Name 'AdministrativeUnitMembers')) {
+        $auId = [string](Get-InspectorSnapshotProperty -InputObject $auMemberRow -Name 'AdministrativeUnitId')
+        $member = Get-InspectorSnapshotProperty -InputObject $auMemberRow -Name 'Member'
+        $memberId = [string](Get-InspectorSnapshotProperty -InputObject $member -Name 'id')
+        if ([string]::IsNullOrWhiteSpace($auId) -or [string]::IsNullOrWhiteSpace($memberId)) { continue }
+        Add-InspectorComparableRecord -Record (New-InspectorComparableRecord `
+            -RecordType 'AdministrativeUnitMember' `
+            -SemanticKey "AdministrativeUnitMember|$auId|$memberId" `
+            -SubjectObjectType 'AdministrativeUnit' `
+            -SubjectObjectId $auId `
+            -RelatedObjectId $memberId `
+            -Value ([PSCustomObject][ordered]@{ AdministrativeUnitId = $auId; MemberId = $memberId }) `
+            -EvidenceIds @([string](Get-InspectorSnapshotProperty -InputObject $auMemberRow -Name 'EvidenceId')))
+    }
+
+    foreach ($riskyUser in @(Get-InspectorSnapshotProperty -InputObject $collections -Name 'RiskyUsers')) {
+        $userId = [string](Get-InspectorSnapshotProperty -InputObject $riskyUser -Name 'id')
+        if ([string]::IsNullOrWhiteSpace($userId)) { continue }
+        Add-InspectorComparableRecord -Record (New-InspectorComparableRecord `
+            -RecordType 'RiskyUser' `
+            -SemanticKey "RiskyUser|$userId" `
+            -SubjectObjectType 'User' `
+            -SubjectObjectId $userId `
+            -RelatedObjectId $userId `
+            -Value ([PSCustomObject][ordered]@{
+                UserId = $userId
+                RiskLevel = [string](Get-InspectorSnapshotProperty -InputObject $riskyUser -Name 'riskLevel')
+                RiskState = [string](Get-InspectorSnapshotProperty -InputObject $riskyUser -Name 'riskState')
+                RiskDetail = [string](Get-InspectorSnapshotProperty -InputObject $riskyUser -Name 'riskDetail')
+            }) `
+            -EvidenceIds @([string](Get-InspectorSnapshotProperty -InputObject $riskyUser -Name 'EvidenceId')))
+    }
+
     return @($recordByKey.Values | Sort-Object SemanticKey)
 }
 

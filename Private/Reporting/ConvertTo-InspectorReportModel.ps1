@@ -746,7 +746,24 @@ function Test-InspectorReportPackageConsistency {
         $EvidenceRows |
             Where-Object {
                 $queryName = ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $_ -Name 'QueryName')
-                -not [string]::IsNullOrWhiteSpace($queryName) -and $queryName -ne 'Organization'
+                if ([string]::IsNullOrWhiteSpace($queryName) -or $queryName -eq 'Organization') {
+                    return $false
+                }
+
+                $requiredForCoverage = Get-InspectorReportProperty -InputObject $_ -Name 'RequiredForCoverage'
+                if ($null -ne $requiredForCoverage) {
+                    try {
+                        if (-not [System.Convert]::ToBoolean($requiredForCoverage)) {
+                            return $false
+                        }
+                    }
+                    catch {
+                        # A malformed advisory marker must never shrink the
+                        # required-evidence denominator. Treat it as required.
+                    }
+                }
+
+                return $true
             }
     )
     $incompleteRequiredEvidenceRows = @(
@@ -995,13 +1012,28 @@ function Test-InspectorReportPackageConsistency {
         $requiredEvidenceComplete -and
         $evidencePlanMatches
 
+    $errorRows =
+        if ($errors.Count -gt 0) {
+            @($errors)
+        }
+        else {
+            @([PSCustomObject][ordered]@{ ErrorId = $null; Message = $null; AffectedInvariant = $null })
+        }
+    $warningRows =
+        if ($warnings.Count -gt 0) {
+            @($warnings)
+        }
+        else {
+            @([PSCustomObject][ordered]@{ WarningId = $null; Message = $null; AffectedInvariant = $null })
+        }
+
     return [PSCustomObject][ordered]@{
         Status = $packageStatus
         ReleaseEligible = $releaseEligible
         SourceStatus = $sourceStatus
         FailedObjectCount = $failedObjectCount
-        Errors = @($errors)
-        Warnings = @($warnings)
+        Errors = $errorRows
+        Warnings = $warningRows
     }
 }
 
@@ -1492,6 +1524,11 @@ function ConvertTo-InspectorReportModel {
             -InputObjects @($Summary, $Manifest, $InputObject) `
             -Names @('ScopeInventory')
 
+    $tenantCapabilities =
+        Get-InspectorReportFirstValue `
+            -InputObjects @($Summary, $Manifest, $InputObject) `
+            -Names @('TenantCapabilities')
+
     $runId =
         Get-InspectorReportFirstValue `
             -InputObjects @($InputObject, $Manifest, $Summary) `
@@ -1703,6 +1740,7 @@ function ConvertTo-InspectorReportModel {
         Manifest                      = $Manifest
         Summary                       = $Summary
         ScopeInventory                = $scopeInventory
+        TenantCapabilities            = $tenantCapabilities
         AssessmentCoverage            = $assessmentCoverage
         AssessmentIntelligence        = $AssessmentIntelligence
         TenantPosture                 = $TenantPosture

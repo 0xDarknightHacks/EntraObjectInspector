@@ -22,12 +22,18 @@ function New-InspectorTenantSnapshot {
     $hasMemberReadHidden = 'Member.Read.Hidden' -in $contextScopes
     $collectionMap = [ordered]@{
         Applications = @{ ObjectType = 'Application'; Uri = "$graphBaseUri/applications?`$select=id,appId,displayName,signInAudience,publisherDomain,verifiedPublisher,appRoles,requiredResourceAccess,keyCredentials,passwordCredentials&`$top=999"; Permission = 'Application.Read.All' }
-        ServicePrincipals = @{ ObjectType = 'ServicePrincipal'; Uri = "$graphBaseUri/servicePrincipals?`$select=id,appId,displayName,servicePrincipalType,accountEnabled,appRoleAssignmentRequired,tags,appRoles,appOwnerOrganizationId,publisherName,verifiedPublisher,keyCredentials,passwordCredentials&`$top=999"; Permission = 'Application.Read.All' }
+        ServicePrincipals = @{ ObjectType = 'ServicePrincipal'; Uri = "$graphBaseUri/servicePrincipals?`$select=id,appId,displayName,servicePrincipalType,accountEnabled,appRoleAssignmentRequired,tags,appRoles,appOwnerOrganizationId,publisherName,verifiedPublisher,keyCredentials,passwordCredentials&`$top=100"; Permission = 'Application.Read.All' }
         Users = @{ ObjectType = 'User'; Uri = "$graphBaseUri/users?`$select=id,userPrincipalName,displayName,userType,accountEnabled&`$top=999"; Permission = 'User.Read.All' }
         Groups = @{ ObjectType = 'Group'; Uri = "$graphBaseUri/groups?`$select=id,displayName,securityEnabled,mailEnabled,groupTypes,isAssignableToRole,visibility,membershipRule,membershipRuleProcessingState,onPremisesSyncEnabled&`$top=999"; Permission = 'GroupMember.Read.All' }
-        Organization = @{ Uri = "$graphBaseUri/organization?`$select=id,displayName,verifiedDomains&`$top=999"; Permission = 'Organization.Read.All' }
-        OAuth2PermissionGrants = @{ Uri = "$graphBaseUri/oauth2PermissionGrants?`$select=id,clientId,resourceId,principalId,consentType,scope&`$top=999"; Permission = 'Directory.Read.All' }
-        DirectoryRoleAssignments = @{ Uri = "$graphBaseUri/roleManagement/directory/roleAssignments?`$expand=roleDefinition&`$top=999"; Permission = 'RoleManagement.Read.Directory' }
+        Organization = @{ Uri = "$graphBaseUri/organization?`$select=id,displayName,verifiedDomains"; Permission = 'Organization.Read.All' }
+        SubscribedSkus = @{ Uri = "$graphBaseUri/subscribedSkus?`$select=id,skuId,skuPartNumber,capabilityStatus,servicePlans"; Permission = 'LicenseAssignment.Read.All (least privileged), Directory.Read.All, or Organization.Read.All'; RequiredForCoverage = $false }
+        OAuth2PermissionGrants = @{ Uri = "$graphBaseUri/oauth2PermissionGrants?`$top=999"; Permission = 'Directory.Read.All' }
+        DirectoryRoleDefinitions = @{ Uri = "$graphBaseUri/roleManagement/directory/roleDefinitions"; Permission = 'RoleManagement.Read.Directory' }
+        DirectoryRoleAssignments = @{ Uri = "$graphBaseUri/roleManagement/directory/roleAssignments?`$expand=roleDefinition"; Permission = 'RoleManagement.Read.Directory' }
+        RoleAssignmentScheduleInstances = @{ Uri = "$graphBaseUri/roleManagement/directory/roleAssignmentScheduleInstances"; Permission = 'RoleAssignmentSchedule.Read.Directory' }
+        RoleEligibilityScheduleInstances = @{ Uri = "$graphBaseUri/roleManagement/directory/roleEligibilityScheduleInstances"; Permission = 'RoleEligibilitySchedule.Read.Directory' }
+        AdministrativeUnits = @{ Uri = "$graphBaseUri/directory/administrativeUnits?`$select=id,displayName,description,visibility,isMemberManagementRestricted,membershipType,membershipRule,membershipRuleProcessingState"; Permission = 'AdministrativeUnit.Read.All' }
+        RiskyUsers = @{ Uri = "$graphBaseUri/identityProtection/riskyUsers?`$select=id,userPrincipalName,riskLevel,riskState,riskDetail,riskLastUpdatedDateTime,isDeleted,isProcessing&`$top=500"; Permission = 'IdentityRiskyUser.Read.All' }
     }
 
     $collections = [ordered]@{}
@@ -38,6 +44,7 @@ function New-InspectorTenantSnapshot {
     $targetedMode = @($TargetSpecification | Where-Object { $null -ne $_ }).Count -gt 0
     $targetResolution = $null
     $targetedTenantCollections = $null
+    $tenantLicenseProfile = Get-InspectorTenantLicenseCapabilityProfile
 
     if ($targetedMode) {
         $targetResolution = Resolve-InspectorAssessmentTargets -TargetSpecification $TargetSpecification -ObjectType $ObjectType -RuntimeTelemetry $RuntimeTelemetry
@@ -73,17 +80,54 @@ function New-InspectorTenantSnapshot {
             continue
         }
 
+        if ($targetedMode -and $name -in @('SubscribedSkus','DirectoryRoleDefinitions','RoleAssignmentScheduleInstances','RoleEligibilityScheduleInstances','AdministrativeUnits','RiskyUsers')) {
+            $collections[$name] = @()
+            $summary[$name] = [PSCustomObject][ordered]@{
+                Status       = 'NotRun'
+                Count        = 0
+                Completeness = 'Partial'
+                Truncated    = $false
+                Limitations  = @("Tenant-wide privileged identity context collection '$name' is not run during targeted assessments.")
+            }
+            continue
+        }
+
         if ($definition.ContainsKey('ObjectType') -and $definition.ObjectType -notin @($ObjectType)) {
             $collections[$name] = @()
             $summary[$name] = [PSCustomObject][ordered]@{ Status = 'NotRun'; Count = 0 }
             continue
         }
 
-        $result = New-InspectorSnapshotCollectionResult `
-            -Name $name `
-            -Uri $definition.Uri `
-            -RequiredPermission $definition.Permission `
-            -RuntimeTelemetry $RuntimeTelemetry
+        $licenseCapability = $null
+        if (-not $targetedMode -and $name -in @('RoleAssignmentScheduleInstances', 'RoleEligibilityScheduleInstances')) {
+            $licenseCapability = Get-InspectorSnapshotProperty -InputObject $tenantLicenseProfile -Name 'PrivilegedIdentityManagement'
+        }
+        elseif (-not $targetedMode -and $name -eq 'RiskyUsers') {
+            $licenseCapability = Get-InspectorSnapshotProperty -InputObject $tenantLicenseProfile -Name 'IdentityProtectionRiskyUsers'
+        }
+
+        if ($null -ne $licenseCapability -and [string](Get-InspectorSnapshotProperty -InputObject $licenseCapability -Name 'Status') -eq 'NotLicensed') {
+            $result =
+                New-InspectorSnapshotLicenseUnavailableCollectionResult `
+                    -Name $name `
+                    -Uri $definition.Uri `
+                    -RequiredPermission $definition.Permission `
+                    -CapabilityName $(if ($name -eq 'RiskyUsers') { 'Microsoft Entra ID Protection risky-user Graph access' } else { 'Microsoft Entra Privileged Identity Management' }) `
+                    -LicenseRequirement ([string](Get-InspectorSnapshotProperty -InputObject $licenseCapability -Name 'Requirement'))
+        }
+        else {
+            $result =
+                New-InspectorSnapshotCollectionResult `
+                    -Name $name `
+                    -Uri $definition.Uri `
+                    -RequiredPermission $definition.Permission `
+                    -RuntimeTelemetry $RuntimeTelemetry
+        }
+
+        if ($definition.ContainsKey('RequiredForCoverage')) {
+            $result.Evidence |
+                Add-Member -NotePropertyName 'RequiredForCoverage' -NotePropertyValue ([bool]$definition.RequiredForCoverage) -Force
+        }
 
         $sourceItemCount = @($result.Items).Count
         $items = @($result.Items)
@@ -136,6 +180,21 @@ function New-InspectorTenantSnapshot {
             Completeness      = $(if ($wasTruncated) { 'Truncated' } elseif ($result.Status -eq 'Success') { 'Complete' } else { 'Partial' })
             Truncated         = [bool]$wasTruncated
         }
+
+        if ($name -eq 'SubscribedSkus') {
+            $tenantLicenseProfile =
+                Get-InspectorTenantLicenseCapabilityProfile `
+                    -SubscribedSkus @($items) `
+                    -InventoryStatus ([string]$result.Status) `
+                    -InventoryLimitations @($result.Limitations) `
+                    -Evaluated
+
+            if ($result.Status -ne 'Success') {
+                $limitations.Add(
+                    'Tenant license capability inventory from /subscribedSkus was unavailable. PIM and Identity Protection license prevalidation is therefore unknown; their feature endpoint evidence remains authoritative.'
+                )
+            }
+        }
     }
 
     $organization =
@@ -186,6 +245,7 @@ function New-InspectorTenantSnapshot {
         TenantDisplayName   = $tenantDisplayName
         VerifiedDomains     = @($verifiedDomains)
         OrganizationStatus  = $summary.Organization.Status
+        LicenseValidation    = $tenantLicenseProfile
     }
 
     # Carry the current tenant identifier into the in-memory snapshot resource
@@ -201,10 +261,79 @@ function New-InspectorTenantSnapshot {
         'ApplicationOwners','ServicePrincipalOwners','ServicePrincipalOwnedObjects','ServicePrincipalGroupMemberships','GroupOwners','GroupMembers',
         'GroupMemberships','UserTransitiveMemberships','AppRoleAssignments',
         'AppRoleAssignedTo','ApplicationCredentials','ServicePrincipalCredentials',
-        'RequiredResourceAccess','ExposedAppRoles'
+        'RequiredResourceAccess','ExposedAppRoles','AdministrativeUnitMembers','AdministrativeUnitScopedRoleMembers'
     )) {
         $collections[$name] = @()
         $summary[$name] = [PSCustomObject][ordered]@{ Status = 'Success'; Count = 0 }
+    }
+
+    foreach ($administrativeUnit in @($collections.AdministrativeUnits)) {
+        $auId = [string](Get-InspectorSnapshotProperty -InputObject $administrativeUnit -Name 'id')
+        if ([string]::IsNullOrWhiteSpace($auId)) { continue }
+
+        $auVisibility = [string](Get-InspectorSnapshotProperty -InputObject $administrativeUnit -Name 'visibility')
+        $memberQueryName = "AdministrativeUnitMembers:$auId"
+        $memberUri = "$graphBaseUri/directory/administrativeUnits/${auId}/members?`$top=999"
+        if ($auVisibility -eq 'HiddenMembership' -and -not $hasMemberReadHidden) {
+            $hiddenLimitation = "Administrative unit '$auId' uses HiddenMembership visibility, but the current app-only Graph context does not declare Member.Read.Hidden. Member completeness cannot be established."
+            $hiddenEvidence = [PSCustomObject][ordered]@{
+                PSTypeName         = 'EntraObjectInspector.SnapshotEvidence'
+                EvidenceId         = [guid]::NewGuid().ToString()
+                QueryName          = $memberQueryName
+                Endpoint           = $memberUri
+                RequiredPermission = 'AdministrativeUnit.Read.All + Member.Read.Hidden'
+                CollectionTime     = (Get-Date).ToUniversalTime().ToString('o')
+                Status             = 'InsufficientPermission'
+                ResultCount        = 0
+                Limitations        = @($hiddenLimitation)
+                CollectorName      = $memberQueryName
+                EvidenceScope      = 'TenantCollection'
+                SubjectObjectType  = 'AdministrativeUnit'
+                SubjectObjectId    = $auId
+                Completeness       = 'Partial'
+                SourceResultCount  = 0
+            }
+            $evidence.Add($hiddenEvidence)
+            $limitations.Add($hiddenLimitation)
+        }
+        else {
+            $members = New-InspectorSnapshotCollectionResult `
+                -Name $memberQueryName `
+                -Uri $memberUri `
+                -RequiredPermission $(if ($auVisibility -eq 'HiddenMembership') { 'AdministrativeUnit.Read.All + Member.Read.Hidden' } else { 'AdministrativeUnit.Read.All' }) `
+                -EvidenceScope 'TenantCollection' `
+                -SubjectObjectType 'AdministrativeUnit' `
+                -SubjectObjectId $auId `
+                -RuntimeTelemetry $RuntimeTelemetry
+            $evidence.Add($members.Evidence)
+            foreach ($limitation in @($members.Limitations)) {
+                if (-not [string]::IsNullOrWhiteSpace([string]$limitation)) { $limitations.Add([string]$limitation) }
+            }
+            foreach ($member in @($members.Items)) {
+                $collections['AdministrativeUnitMembers'] += [PSCustomObject]@{
+                    AdministrativeUnitId = $auId
+                    Member = $member
+                    EvidenceId = $members.Evidence.EvidenceId
+                }
+            }
+        }
+
+    }
+
+    foreach ($definition in @(
+        [PSCustomObject]@{ Name = 'AdministrativeUnitMembers'; QueryPrefix = 'AdministrativeUnitMembers:' }
+    )) {
+        $matchingEvidence = @(
+            $evidence |
+                Where-Object {
+                    [string](Get-InspectorSnapshotProperty -InputObject $_ -Name 'QueryName') -like "$($definition.QueryPrefix)*"
+                }
+        )
+        $summary[$definition.Name] =
+            Get-InspectorSnapshotAggregateState `
+                -Evidence $matchingEvidence `
+                -FallbackStatus $(if (@($collections.AdministrativeUnits).Count -gt 0) { 'Success' } else { [string](Get-InspectorSnapshotProperty -InputObject $summary.AdministrativeUnits -Name 'Status') }) `
+                -Count @($collections[$definition.Name]).Count
     }
 
     # High-volume independent relationship GETs are transported through
@@ -258,7 +387,7 @@ function New-InspectorTenantSnapshot {
             @{ Name = "ServicePrincipalOwners:$id"; Bucket = 'ServicePrincipalOwners'; Uri = "$graphBaseUri/servicePrincipals/${id}/owners?`$select=id,displayName&`$top=999"; ItemName = 'Owner'; Permission = 'Application.Read.All' },
             @{ Name = "ServicePrincipalOwnedObjects:$id"; Bucket = 'ServicePrincipalOwnedObjects'; Uri = "$graphBaseUri/servicePrincipals/${id}/ownedObjects?`$select=id,displayName&`$top=999"; ItemName = 'OwnedObject'; Permission = 'Application.Read.All' },
             @{ Name = "AppRoleAssignments:$id"; Bucket = 'AppRoleAssignments'; Uri = "$graphBaseUri/servicePrincipals/${id}/appRoleAssignments?`$top=999"; ItemName = 'Assignment'; Permission = 'Application.Read.All' },
-            @{ Name = "AppRoleAssignedTo:$id"; Bucket = 'AppRoleAssignedTo'; Uri = "$graphBaseUri/servicePrincipals/${id}/appRoleAssignedTo?`$top=999"; ItemName = 'Assignment'; Permission = 'Application.Read.All' }
+            @{ Name = "AppRoleAssignedTo:$id"; Bucket = 'AppRoleAssignedTo'; Uri = "$graphBaseUri/servicePrincipals/${id}/appRoleAssignedTo"; ItemName = 'Assignment'; Permission = 'Application.Read.All' }
         )
 
         if (@($collections.Groups).Count -gt 0) {
@@ -763,7 +892,19 @@ function New-InspectorTenantSnapshot {
         ServicePrincipalsDiscovered        = @($collections.ServicePrincipals).Count
         GroupsDiscovered                   = @($collections.Groups).Count
         OAuth2PermissionGrantsDiscovered   = @($collections.OAuth2PermissionGrants).Count
+        SubscribedSkusDiscovered            = @($collections.SubscribedSkus).Count
+        LicenseInventoryStatus              = [string](Get-InspectorSnapshotProperty -InputObject $tenantLicenseProfile -Name 'InventoryStatus')
+        LicenseValidationStatus             = [string](Get-InspectorSnapshotProperty -InputObject $tenantLicenseProfile -Name 'ValidationStatus')
+        PimLicenseCapability                = [string](Get-InspectorSnapshotProperty -InputObject (Get-InspectorSnapshotProperty -InputObject $tenantLicenseProfile -Name 'PrivilegedIdentityManagement') -Name 'Status')
+        IdentityProtectionLicenseCapability = [string](Get-InspectorSnapshotProperty -InputObject (Get-InspectorSnapshotProperty -InputObject $tenantLicenseProfile -Name 'IdentityProtectionRiskyUsers') -Name 'Status')
+        DirectoryRoleDefinitionsDiscovered = @($collections.DirectoryRoleDefinitions).Count
         DirectoryRoleAssignmentsDiscovered = @($collections.DirectoryRoleAssignments).Count
+        RoleAssignmentScheduleInstancesDiscovered = @($collections.RoleAssignmentScheduleInstances).Count
+        RoleEligibilityScheduleInstancesDiscovered = @($collections.RoleEligibilityScheduleInstances).Count
+        AdministrativeUnitsDiscovered      = @($collections.AdministrativeUnits).Count
+        AdministrativeUnitMembersDiscovered = @($collections.AdministrativeUnitMembers).Count
+        AdministrativeUnitScopedRoleMembersDiscovered = @($collections.AdministrativeUnitScopedRoleMembers).Count
+        RiskyUsersDiscovered               = @($collections.RiskyUsers).Count
         EvidenceRecordsCollected           = @($evidence).Count
         FailedObjects                      = 0
         MicrosoftPublishedServicePrincipals = @($microsoftPublishedServicePrincipals).Count

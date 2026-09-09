@@ -81,13 +81,62 @@ function Get-InspectorObservationDate {
         return $null
     }
 
-    $date = [datetime]::MinValue
+    if ($Value -is [datetimeoffset]) {
+        return ([datetimeoffset]$Value).UtcDateTime
+    }
 
-    if ([datetime]::TryParse([string]$Value, [ref]$date)) {
-        return $date.ToUniversalTime()
+    if ($Value -is [datetime]) {
+        $dateTime = [datetime]$Value
+        if ($dateTime.Kind -eq [System.DateTimeKind]::Utc) {
+            return $dateTime
+        }
+        if ($dateTime.Kind -eq [System.DateTimeKind]::Local) {
+            return $dateTime.ToUniversalTime()
+        }
+
+        # Microsoft Graph timestamps are UTC ISO 8601 values. A live Graph
+        # object can surface an Unspecified DateTime whereas the portable JSON
+        # replay carries an explicit offset. Treat the unspecified live value as
+        # UTC instead of applying the host's local timezone and changing the
+        # semantic instant.
+        return [datetime]::SpecifyKind($dateTime, [System.DateTimeKind]::Utc)
+    }
+
+    $text = [string]$Value
+    if ([string]::IsNullOrWhiteSpace($text)) {
+        return $null
+    }
+
+    $dateOffset = [datetimeoffset]::MinValue
+    $styles =
+        [System.Globalization.DateTimeStyles]::AllowWhiteSpaces -bor
+        [System.Globalization.DateTimeStyles]::AssumeUniversal -bor
+        [System.Globalization.DateTimeStyles]::AdjustToUniversal
+
+    if ([datetimeoffset]::TryParse(
+        $text,
+        [System.Globalization.CultureInfo]::InvariantCulture,
+        $styles,
+        [ref]$dateOffset
+    )) {
+        return $dateOffset.UtcDateTime
     }
 
     return $null
+}
+function Get-InspectorObservationCanonicalDateText {
+    [CmdletBinding()]
+    param (
+        [AllowNull()]
+        [object]$Value
+    )
+
+    $date = Get-InspectorObservationDate -Value $Value
+    if ($null -eq $date) {
+        return $null
+    }
+
+    return $date.ToString('o', [System.Globalization.CultureInfo]::InvariantCulture)
 }
 
 function New-InspectorObservationId {

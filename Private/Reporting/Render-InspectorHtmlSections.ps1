@@ -338,7 +338,17 @@ function New-InspectorScopeInventoryHtml {
         [PSCustomObject]@{ Metric = 'Microsoft-published service principals (metadata-classified)'; Count = $microsoftPublishedValue }
         [PSCustomObject]@{ Metric = 'Groups discovered'; Count = Get-InspectorReportMetricValue -InputObject $inventory -Names @('GroupsDiscovered') }
         [PSCustomObject]@{ Metric = 'OAuth2 permission grants discovered'; Count = Get-InspectorReportMetricValue -InputObject $inventory -Names @('OAuth2PermissionGrantsDiscovered') }
+        [PSCustomObject]@{ Metric = 'Subscribed SKUs discovered (license inventory)'; Count = Get-InspectorReportMetricValue -InputObject $inventory -Names @('SubscribedSkusDiscovered') }
+        [PSCustomObject]@{ Metric = 'License inventory status'; Count = Get-InspectorReportMetricValue -InputObject $inventory -Names @('LicenseInventoryStatus') }
+        [PSCustomObject]@{ Metric = 'PIM license capability'; Count = Get-InspectorReportMetricValue -InputObject $inventory -Names @('PimLicenseCapability') }
+        [PSCustomObject]@{ Metric = 'Identity Protection license capability'; Count = Get-InspectorReportMetricValue -InputObject $inventory -Names @('IdentityProtectionLicenseCapability') }
+        [PSCustomObject]@{ Metric = 'Directory role definitions discovered'; Count = Get-InspectorReportMetricValue -InputObject $inventory -Names @('DirectoryRoleDefinitionsDiscovered') }
         [PSCustomObject]@{ Metric = 'Directory role assignments discovered'; Count = Get-InspectorReportMetricValue -InputObject $inventory -Names @('DirectoryRoleAssignmentsDiscovered') }
+        [PSCustomObject]@{ Metric = 'PIM active role states discovered'; Count = Get-InspectorReportMetricValue -InputObject $inventory -Names @('RoleAssignmentScheduleInstancesDiscovered') }
+        [PSCustomObject]@{ Metric = 'PIM eligible role states discovered'; Count = Get-InspectorReportMetricValue -InputObject $inventory -Names @('RoleEligibilityScheduleInstancesDiscovered') }
+        [PSCustomObject]@{ Metric = 'Administrative units discovered'; Count = Get-InspectorReportMetricValue -InputObject $inventory -Names @('AdministrativeUnitsDiscovered') }
+        [PSCustomObject]@{ Metric = 'Administrative unit members discovered'; Count = Get-InspectorReportMetricValue -InputObject $inventory -Names @('AdministrativeUnitMembersDiscovered') }
+        [PSCustomObject]@{ Metric = 'Risky users discovered'; Count = Get-InspectorReportMetricValue -InputObject $inventory -Names @('RiskyUsersDiscovered') }
         [PSCustomObject]@{ Metric = 'Evidence records collected'; Count = Get-InspectorReportMetricValue -InputObject $inventory -Names @('EvidenceRecordsCollected') }
         [PSCustomObject]@{ Metric = 'Failed objects'; Count = Get-InspectorReportMetricValue -InputObject $inventory -Names @('FailedObjects') }
     )
@@ -347,6 +357,59 @@ function New-InspectorScopeInventoryHtml {
 <section id="assessment-scope-inventory" class="section">
   <div class="section-header"><h2>Assessment Scope Inventory</h2><span class="muted">Collected snapshot scope</span></div>
   $(New-InspectorHtmlTable -Rows $rows -Columns @('Metric','Count'))
+</section>
+"@
+}
+
+function New-InspectorTenantCapabilitiesHtml {
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory)]
+        [object]$ReportModel
+    )
+
+    # Reporting consumes only the already-normalized scope inventory. This
+    # keeps report generation fully offline and avoids coupling HTML rendering
+    # to Graph objects or SKU parsing logic.
+    $summary = Get-InspectorReportProperty -InputObject $ReportModel -Name 'Summary'
+    $inventory = Get-InspectorReportProperty -InputObject $ReportModel -Name 'ScopeInventory'
+    if ($null -eq $inventory) {
+        $inventory = Get-InspectorReportProperty -InputObject $summary -Name 'ScopeInventory'
+    }
+
+    $licenseInventoryStatus = ConvertTo-InspectorReportString (
+        Get-InspectorReportMetricValue -InputObject $inventory -Names @('LicenseInventoryStatus')
+    )
+    $licenseValidationStatus = ConvertTo-InspectorReportString (
+        Get-InspectorReportMetricValue -InputObject $inventory -Names @('LicenseValidationStatus')
+    )
+    $pimCapability = ConvertTo-InspectorReportString (
+        Get-InspectorReportMetricValue -InputObject $inventory -Names @('PimLicenseCapability')
+    )
+    $identityProtectionCapability = ConvertTo-InspectorReportString (
+        Get-InspectorReportMetricValue -InputObject $inventory -Names @('IdentityProtectionLicenseCapability')
+    )
+
+    # Older report models intentionally remain renderable. Missing license
+    # fields are represented as Not evaluated rather than causing StrictMode or
+    # command failures.
+    if ([string]::IsNullOrWhiteSpace($licenseInventoryStatus)) { $licenseInventoryStatus = 'Not evaluated' }
+    if ([string]::IsNullOrWhiteSpace($licenseValidationStatus)) { $licenseValidationStatus = 'Not evaluated' }
+    if ([string]::IsNullOrWhiteSpace($pimCapability)) { $pimCapability = 'Not evaluated' }
+    if ([string]::IsNullOrWhiteSpace($identityProtectionCapability)) { $identityProtectionCapability = 'Not evaluated' }
+
+    $rows = @(
+        [PSCustomObject]@{ Capability = 'Tenant license inventory'; Status = $licenseInventoryStatus; Meaning = 'Optional /subscribedSkus capability inventory used for prevalidation.' }
+        [PSCustomObject]@{ Capability = 'License validation'; Status = $licenseValidationStatus; Meaning = 'Overall capability-level entitlement signal; not per-user licensing compliance.' }
+        [PSCustomObject]@{ Capability = 'Privileged Identity Management'; Status = $pimCapability; Meaning = 'Requires a qualifying Microsoft Entra PIM entitlement; feature evidence remains authoritative when inventory is unknown.' }
+        [PSCustomObject]@{ Capability = 'Identity Protection risky users'; Status = $identityProtectionCapability; Meaning = 'Requires a qualifying Microsoft Entra Identity Protection entitlement; feature evidence remains authoritative when inventory is unknown.' }
+    )
+
+    return @"
+<section id="tenant-license-capabilities" class="section">
+  <div class="section-header"><h2>Tenant License Capabilities</h2><span class="muted">Capability-aware collection prevalidation</span></div>
+  <p class="muted">License validation is a tenant-level capability signal only. It does not validate seat assignment or Microsoft licensing compliance.</p>
+  $(New-InspectorHtmlTable -Rows $rows -Columns @('Capability','Status','Meaning'))
 </section>
 "@
 }
@@ -360,7 +423,7 @@ function New-InspectorScopeStatementHtml {
   <div class="section-header"><h2>Assessment Scope</h2><span class="muted">Deliberate v1 boundaries</span></div>
   <div class="trust-grid">
     <div class="trust-box"><strong>Included</strong><br><span class="muted">Users, groups, app registrations, service principals, OAuth2 consent grants, ownership, selected credentials, selected Microsoft Graph application permissions, directory role assignments, and selected object relationships.</span></div>
-    <div class="trust-box"><strong>Not assessed</strong><br><span class="muted">Conditional Access, MFA/authentication methods, Identity Protection, PIM, sign-in activity, audit history, device trust, Microsoft 365 workloads, comprehensive compliance state, numerical risk scoring, and attack paths.</span></div>
+    <div class="trust-box"><strong>Not assessed</strong><br><span class="muted">Conditional Access, MFA/authentication methods, PIM administration or history, sign-in activity, audit history, risk-detection event analytics, device trust, Microsoft 365 workloads, comprehensive compliance state, numerical risk scoring, and attack paths.</span></div>
   </div>
 </section>
 "@

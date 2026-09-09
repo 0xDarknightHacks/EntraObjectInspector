@@ -126,11 +126,12 @@ function Get-InspectorTargetQueryDefinition {
 
     $encodedFilter = [uri]::EscapeDataString($filter)
     $queryName = "TargetResolve:${ObjectType}:$(Get-InspectorDeterministicToken -Value "$ObjectType|$Identity")"
+    $top = if ($ObjectType -eq 'ServicePrincipal') { 100 } else { 999 }
     return [PSCustomObject][ordered]@{
         ObjectType = $ObjectType
         CollectionName = $collection
         QueryName = $queryName
-        Uri = "$graphBaseUri/$($collection.Substring(0,1).ToLowerInvariant())$($collection.Substring(1))?`$select=$select&`$filter=$encodedFilter&`$top=999"
+        Uri = "$graphBaseUri/$($collection.Substring(0,1).ToLowerInvariant())$($collection.Substring(1))?`$select=$select&`$filter=$encodedFilter&`$top=$top"
         RequiredPermission = $permission
     }
 }

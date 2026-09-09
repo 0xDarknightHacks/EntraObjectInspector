@@ -13,6 +13,52 @@ function Get-InspectorSnapshotRelationships {
     $snapshotIndexes = Get-InspectorSnapshotProperty -InputObject $TenantSnapshot -Name 'Indexes'
     $snapshotEvidenceById = Get-InspectorSnapshotProperty -InputObject $snapshotIndexes -Name 'EvidenceById'
     $objectRelationshipEvidenceIndex = Get-InspectorSnapshotProperty -InputObject $snapshotIndexes -Name 'ObjectRelationshipEvidenceByObjectKey'
+    $directoryRoleDefinitionsById = Get-InspectorSnapshotProperty -InputObject $snapshotIndexes -Name 'DirectoryRoleDefinitionsById'
+    $roleAssignmentScheduleInstancesByPrincipalId = Get-InspectorSnapshotProperty -InputObject $snapshotIndexes -Name 'RoleAssignmentScheduleInstancesByPrincipalId'
+    $roleEligibilityScheduleInstancesByPrincipalId = Get-InspectorSnapshotProperty -InputObject $snapshotIndexes -Name 'RoleEligibilityScheduleInstancesByPrincipalId'
+    $administrativeUnitById = Get-InspectorSnapshotProperty -InputObject $snapshotIndexes -Name 'AdministrativeUnitById'
+    $administrativeUnitMembersByMemberId = Get-InspectorSnapshotProperty -InputObject $snapshotIndexes -Name 'AdministrativeUnitMembersByMemberId'
+    $riskyUsersByUserId = Get-InspectorSnapshotProperty -InputObject $snapshotIndexes -Name 'RiskyUsersByUserId'
+
+    function Get-InspectorDirectoryRoleDefinitionFromSnapshot {
+        param ([string]$RoleDefinitionId, [AllowNull()][object]$FallbackRoleDefinition)
+
+        if (-not [string]::IsNullOrWhiteSpace($RoleDefinitionId)) {
+            $indexedRoleDefinition = @(Get-InspectorSnapshotIndexSingle -Index $directoryRoleDefinitionsById -Key $RoleDefinitionId | Select-Object -First 1)
+            if ($indexedRoleDefinition.Count -gt 0) { return $indexedRoleDefinition[0] }
+        }
+
+        return $FallbackRoleDefinition
+    }
+
+    function Get-InspectorAdministrativeUnitScopeFromSnapshot {
+        param ([string]$DirectoryScopeId)
+
+        if ($DirectoryScopeId -like '/administrativeUnits/*') {
+            $auId = $DirectoryScopeId.Substring('/administrativeUnits/'.Length)
+            return @(Get-InspectorSnapshotIndexSingle -Index $administrativeUnitById -Key $auId | Select-Object -First 1)
+        }
+
+        return @()
+    }
+
+    function Get-InspectorNormalizedRoleScopeKey {
+        param ([AllowNull()][string]$DirectoryScopeId, [AllowNull()][string]$AppScopeId)
+
+        $directoryScope = if ([string]::IsNullOrWhiteSpace($DirectoryScopeId)) { '<null>' } else { $DirectoryScopeId.Trim() }
+        $appScope = if ([string]::IsNullOrWhiteSpace($AppScopeId)) { '<null>' } else { $AppScopeId.Trim() }
+        return "$directoryScope|$appScope"
+    }
+
+    function Get-InspectorRoleAssignmentTupleKey {
+        param ([AllowNull()][object]$InputObject)
+
+        $principalId = [string](Get-InspectorSnapshotProperty -InputObject $InputObject -Name 'principalId')
+        $roleDefinitionId = [string](Get-InspectorSnapshotProperty -InputObject $InputObject -Name 'roleDefinitionId')
+        $directoryScopeId = [string](Get-InspectorSnapshotProperty -InputObject $InputObject -Name 'directoryScopeId')
+        $appScopeId = [string](Get-InspectorSnapshotProperty -InputObject $InputObject -Name 'appScopeId')
+        return "$principalId|$roleDefinitionId|$(Get-InspectorNormalizedRoleScopeKey -DirectoryScopeId $directoryScopeId -AppScopeId $appScopeId)"
+    }
 
     # Current snapshots index evidence once at snapshot construction/import. Keep
     # the legacy fallback for older fixtures/artifacts that do not expose the
@@ -164,15 +210,130 @@ function Get-InspectorSnapshotRelationships {
             }
         }
 
+        $activeScheduleInstances = @(Get-InspectorSnapshotIndexSingle -Index $roleAssignmentScheduleInstancesByPrincipalId -Key $objectId)
+        $activeSchedulesByOriginId = @{}
+        $activeSchedulesByTupleKey = @{}
+        $matchedActiveScheduleIds = @{}
+        foreach ($scheduleInstance in $activeScheduleInstances) {
+            $originId = [string](Get-InspectorSnapshotProperty -InputObject $scheduleInstance -Name 'roleAssignmentOriginId')
+            if (-not [string]::IsNullOrWhiteSpace($originId)) {
+                if (-not $activeSchedulesByOriginId.ContainsKey($originId)) { $activeSchedulesByOriginId[$originId] = [System.Collections.Generic.List[object]]::new() }
+                $activeSchedulesByOriginId[$originId].Add($scheduleInstance)
+            }
+
+            $tupleKey = Get-InspectorRoleAssignmentTupleKey -InputObject $scheduleInstance
+            if (-not $activeSchedulesByTupleKey.ContainsKey($tupleKey)) { $activeSchedulesByTupleKey[$tupleKey] = [System.Collections.Generic.List[object]]::new() }
+            $activeSchedulesByTupleKey[$tupleKey].Add($scheduleInstance)
+        }
+
         foreach ($assignment in @(Get-InspectorSnapshotIndexSingle -Index $TenantSnapshot.Indexes.DirectoryRoleAssignmentsByPrincipalId -Key $objectId)) {
-            $roleDefinition = Get-InspectorSnapshotProperty -InputObject $assignment -Name 'roleDefinition'
             $principalId = [string](Get-InspectorSnapshotProperty -InputObject $assignment -Name 'principalId')
             if ($principalId -ne $objectId) {
                 continue
             }
 
+            $assignmentId = [string](Get-InspectorSnapshotProperty -InputObject $assignment -Name 'id')
+            $matchedSchedule = $null
+            if (-not [string]::IsNullOrWhiteSpace($assignmentId) -and $activeSchedulesByOriginId.ContainsKey($assignmentId)) {
+                $matchedSchedule = @($activeSchedulesByOriginId[$assignmentId] | Select-Object -First 1)[0]
+            }
+            if ($null -eq $matchedSchedule) {
+                $tupleKey = Get-InspectorRoleAssignmentTupleKey -InputObject $assignment
+                if ($activeSchedulesByTupleKey.ContainsKey($tupleKey)) {
+                    $matchedSchedule = @($activeSchedulesByTupleKey[$tupleKey] | Select-Object -First 1)[0]
+                }
+            }
+            if ($null -ne $matchedSchedule) {
+                $matchedScheduleId = [string](Get-InspectorSnapshotProperty -InputObject $matchedSchedule -Name 'id')
+                if (-not [string]::IsNullOrWhiteSpace($matchedScheduleId)) { $matchedActiveScheduleIds[$matchedScheduleId] = $true }
+            }
+
             $roleDefinitionId = [string](Get-InspectorSnapshotProperty -InputObject $assignment -Name 'roleDefinitionId')
-            $relationships.Add((New-InspectorRelationship -RelationshipType 'AssignedDirectoryRole' -SourceObjectId $objectId -SourceObjectType $objectType -TargetObjectId $roleDefinitionId -TargetObjectType 'DirectoryRoleDefinition' -TargetDisplayName ([string](Get-InspectorSnapshotProperty -InputObject $roleDefinition -Name 'displayName')) -Metadata @{ AssignmentId = [string](Get-InspectorSnapshotProperty -InputObject $assignment -Name 'id'); RoleDefinitionId = $roleDefinitionId; RoleDisplayName = [string](Get-InspectorSnapshotProperty -InputObject $roleDefinition -Name 'displayName'); DirectoryScopeId = [string](Get-InspectorSnapshotProperty -InputObject $assignment -Name 'directoryScopeId'); PrincipalId = $principalId } -EvidenceId ([string](Get-InspectorSnapshotProperty -InputObject $assignment -Name 'EvidenceId') )))
+            $roleDefinition = Get-InspectorDirectoryRoleDefinitionFromSnapshot -RoleDefinitionId $roleDefinitionId -FallbackRoleDefinition (Get-InspectorSnapshotProperty -InputObject $assignment -Name 'roleDefinition')
+            $directoryScopeId = [string](Get-InspectorSnapshotProperty -InputObject $assignment -Name 'directoryScopeId')
+            $appScopeId = [string](Get-InspectorSnapshotProperty -InputObject $assignment -Name 'appScopeId')
+            $auScope = @(Get-InspectorAdministrativeUnitScopeFromSnapshot -DirectoryScopeId $directoryScopeId | Select-Object -First 1)
+            $scopeType = if ($directoryScopeId -eq '/') { 'Tenant' } elseif ($auScope.Count -gt 0) { 'AdministrativeUnit' } elseif (-not [string]::IsNullOrWhiteSpace($appScopeId)) { 'AppScope' } else { 'Unknown' }
+            $assignmentEvidenceId = [string](Get-InspectorSnapshotProperty -InputObject $assignment -Name 'EvidenceId')
+            $scheduleEvidenceId = [string](Get-InspectorSnapshotProperty -InputObject $matchedSchedule -Name 'EvidenceId')
+            $evidenceIds = @($assignmentEvidenceId, $scheduleEvidenceId) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Select-Object -Unique
+            $assignmentType = [string](Get-InspectorSnapshotProperty -InputObject $matchedSchedule -Name 'assignmentType')
+            if ([string]::IsNullOrWhiteSpace($assignmentType)) { $assignmentType = 'Assigned' }
+            $relationshipType = if ($assignmentType -eq 'Activated') { 'ActiveDirectoryRoleScheduleInstance' } else { 'AssignedDirectoryRole' }
+            $metadata = @{
+                AssignmentId                         = $assignmentId
+                ScheduleInstanceId                  = [string](Get-InspectorSnapshotProperty -InputObject $matchedSchedule -Name 'id')
+                RoleAssignmentScheduleId            = [string](Get-InspectorSnapshotProperty -InputObject $matchedSchedule -Name 'roleAssignmentScheduleId')
+                RoleAssignmentOriginId              = [string](Get-InspectorSnapshotProperty -InputObject $matchedSchedule -Name 'roleAssignmentOriginId')
+                RoleDefinitionId                    = $roleDefinitionId
+                RoleDisplayName                     = [string](Get-InspectorSnapshotProperty -InputObject $roleDefinition -Name 'displayName')
+                RoleIsBuiltIn                       = Get-InspectorSnapshotProperty -InputObject $roleDefinition -Name 'isBuiltIn'
+                RoleTemplateId                      = [string](Get-InspectorSnapshotProperty -InputObject $roleDefinition -Name 'templateId')
+                DirectoryScopeId                    = $directoryScopeId
+                AppScopeId                          = $appScopeId
+                ScopeType                           = $scopeType
+                AdministrativeUnitId                = $(if ($auScope.Count -gt 0) { [string](Get-InspectorSnapshotProperty -InputObject $auScope[0] -Name 'id') } else { '' })
+                AdministrativeUnitDisplayName       = $(if ($auScope.Count -gt 0) { [string](Get-InspectorSnapshotProperty -InputObject $auScope[0] -Name 'displayName') } else { '' })
+                AdministrativeUnitRestrictedManagement = $(if ($auScope.Count -gt 0) { Get-InspectorSnapshotProperty -InputObject $auScope[0] -Name 'isMemberManagementRestricted' } else { $null })
+                PrincipalId                         = $principalId
+                AssignmentState                     = $(if ($assignmentType -eq 'Activated') { 'Activated' } else { 'Assigned' })
+                AssignmentType                      = $assignmentType
+                AssignmentSource                    = $(if ($null -ne $matchedSchedule) { 'UnifiedRoleAssignment+RoleAssignmentScheduleInstance' } else { 'UnifiedRoleAssignment' })
+                StartDateTime                       = Get-InspectorSnapshotProperty -InputObject $matchedSchedule -Name 'startDateTime'
+                EndDateTime                         = Get-InspectorSnapshotProperty -InputObject $matchedSchedule -Name 'endDateTime'
+                MemberType                          = [string](Get-InspectorSnapshotProperty -InputObject $matchedSchedule -Name 'memberType')
+                EvidenceIds                         = @($evidenceIds)
+            }
+            $relationships.Add((New-InspectorRelationship -RelationshipType $relationshipType -SourceObjectId $objectId -SourceObjectType $objectType -TargetObjectId $roleDefinitionId -TargetObjectType 'DirectoryRoleDefinition' -TargetDisplayName $metadata.RoleDisplayName -Metadata $metadata -EvidenceId ([string](@($evidenceIds) | Select-Object -First 1))))
+        }
+
+        foreach ($scheduleInstance in $activeScheduleInstances) {
+            $scheduleInstanceId = [string](Get-InspectorSnapshotProperty -InputObject $scheduleInstance -Name 'id')
+            if (-not [string]::IsNullOrWhiteSpace($scheduleInstanceId) -and $matchedActiveScheduleIds.ContainsKey($scheduleInstanceId)) {
+                continue
+            }
+            $roleDefinitionId = [string](Get-InspectorSnapshotProperty -InputObject $scheduleInstance -Name 'roleDefinitionId')
+            $roleDefinition = Get-InspectorDirectoryRoleDefinitionFromSnapshot -RoleDefinitionId $roleDefinitionId -FallbackRoleDefinition (Get-InspectorSnapshotProperty -InputObject $scheduleInstance -Name 'roleDefinition')
+            $directoryScopeId = [string](Get-InspectorSnapshotProperty -InputObject $scheduleInstance -Name 'directoryScopeId')
+            $appScopeId = [string](Get-InspectorSnapshotProperty -InputObject $scheduleInstance -Name 'appScopeId')
+            $auScope = @(Get-InspectorAdministrativeUnitScopeFromSnapshot -DirectoryScopeId $directoryScopeId | Select-Object -First 1)
+            $scopeType = if ($directoryScopeId -eq '/') { 'Tenant' } elseif ($auScope.Count -gt 0) { 'AdministrativeUnit' } elseif (-not [string]::IsNullOrWhiteSpace($appScopeId)) { 'AppScope' } else { 'Unknown' }
+            $assignmentType = [string](Get-InspectorSnapshotProperty -InputObject $scheduleInstance -Name 'assignmentType')
+            if ([string]::IsNullOrWhiteSpace($assignmentType)) { $assignmentType = 'Unknown' }
+            $relationships.Add((New-InspectorRelationship -RelationshipType 'ActiveDirectoryRoleScheduleInstance' -SourceObjectId $objectId -SourceObjectType $objectType -TargetObjectId $roleDefinitionId -TargetObjectType 'DirectoryRoleDefinition' -TargetDisplayName ([string](Get-InspectorSnapshotProperty -InputObject $roleDefinition -Name 'displayName')) -Metadata @{ ScheduleInstanceId = [string](Get-InspectorSnapshotProperty -InputObject $scheduleInstance -Name 'id'); RoleAssignmentScheduleId = [string](Get-InspectorSnapshotProperty -InputObject $scheduleInstance -Name 'roleAssignmentScheduleId'); RoleAssignmentOriginId = [string](Get-InspectorSnapshotProperty -InputObject $scheduleInstance -Name 'roleAssignmentOriginId'); RoleDefinitionId = $roleDefinitionId; RoleDisplayName = [string](Get-InspectorSnapshotProperty -InputObject $roleDefinition -Name 'displayName'); DirectoryScopeId = $directoryScopeId; AppScopeId = $appScopeId; ScopeType = $scopeType; AdministrativeUnitId = $(if ($auScope.Count -gt 0) { [string](Get-InspectorSnapshotProperty -InputObject $auScope[0] -Name 'id') } else { '' }); AdministrativeUnitDisplayName = $(if ($auScope.Count -gt 0) { [string](Get-InspectorSnapshotProperty -InputObject $auScope[0] -Name 'displayName') } else { '' }); StartDateTime = Get-InspectorSnapshotProperty -InputObject $scheduleInstance -Name 'startDateTime'; EndDateTime = Get-InspectorSnapshotProperty -InputObject $scheduleInstance -Name 'endDateTime'; MemberType = [string](Get-InspectorSnapshotProperty -InputObject $scheduleInstance -Name 'memberType'); PrincipalId = [string](Get-InspectorSnapshotProperty -InputObject $scheduleInstance -Name 'principalId'); AssignmentState = $(if ($assignmentType -eq 'Activated') { 'Activated' } else { 'Active' }); AssignmentType = $assignmentType; AssignmentSource = 'RoleAssignmentScheduleInstance'; ReconciliationLimitation = 'No matching unifiedRoleAssignment was present in the snapshot for this active schedule instance.'; EvidenceIds = @([string](Get-InspectorSnapshotProperty -InputObject $scheduleInstance -Name 'EvidenceId')) } -EvidenceId ([string](Get-InspectorSnapshotProperty -InputObject $scheduleInstance -Name 'EvidenceId') )))
+        }
+
+        foreach ($scheduleInstance in @(Get-InspectorSnapshotIndexSingle -Index $roleEligibilityScheduleInstancesByPrincipalId -Key $objectId)) {
+            $roleDefinitionId = [string](Get-InspectorSnapshotProperty -InputObject $scheduleInstance -Name 'roleDefinitionId')
+            $roleDefinition = Get-InspectorDirectoryRoleDefinitionFromSnapshot -RoleDefinitionId $roleDefinitionId -FallbackRoleDefinition (Get-InspectorSnapshotProperty -InputObject $scheduleInstance -Name 'roleDefinition')
+            $directoryScopeId = [string](Get-InspectorSnapshotProperty -InputObject $scheduleInstance -Name 'directoryScopeId')
+            $auScope = @(Get-InspectorAdministrativeUnitScopeFromSnapshot -DirectoryScopeId $directoryScopeId | Select-Object -First 1)
+            $scopeType = if ($directoryScopeId -eq '/') { 'Tenant' } elseif ($auScope.Count -gt 0) { 'AdministrativeUnit' } else { 'Unknown' }
+            $relationships.Add((New-InspectorRelationship -RelationshipType 'EligibleDirectoryRoleScheduleInstance' -SourceObjectId $objectId -SourceObjectType $objectType -TargetObjectId $roleDefinitionId -TargetObjectType 'DirectoryRoleDefinition' -TargetDisplayName ([string](Get-InspectorSnapshotProperty -InputObject $roleDefinition -Name 'displayName')) -Metadata @{ ScheduleInstanceId = [string](Get-InspectorSnapshotProperty -InputObject $scheduleInstance -Name 'id'); RoleEligibilityScheduleId = [string](Get-InspectorSnapshotProperty -InputObject $scheduleInstance -Name 'roleEligibilityScheduleId'); RoleDefinitionId = $roleDefinitionId; RoleDisplayName = [string](Get-InspectorSnapshotProperty -InputObject $roleDefinition -Name 'displayName'); DirectoryScopeId = $directoryScopeId; ScopeType = $scopeType; AdministrativeUnitId = $(if ($auScope.Count -gt 0) { [string](Get-InspectorSnapshotProperty -InputObject $auScope[0] -Name 'id') } else { '' }); AdministrativeUnitDisplayName = $(if ($auScope.Count -gt 0) { [string](Get-InspectorSnapshotProperty -InputObject $auScope[0] -Name 'displayName') } else { '' }); StartDateTime = Get-InspectorSnapshotProperty -InputObject $scheduleInstance -Name 'startDateTime'; EndDateTime = Get-InspectorSnapshotProperty -InputObject $scheduleInstance -Name 'endDateTime'; MemberType = [string](Get-InspectorSnapshotProperty -InputObject $scheduleInstance -Name 'memberType'); PrincipalId = [string](Get-InspectorSnapshotProperty -InputObject $scheduleInstance -Name 'principalId'); AssignmentState = 'Eligible'; AssignmentSource = 'RoleEligibilityScheduleInstance' } -EvidenceId ([string](Get-InspectorSnapshotProperty -InputObject $scheduleInstance -Name 'EvidenceId') )))
+        }
+
+        foreach ($auMemberRow in @(Get-InspectorSnapshotIndexSingle -Index $administrativeUnitMembersByMemberId -Key $objectId)) {
+            $auId = [string](Get-InspectorSnapshotProperty -InputObject $auMemberRow -Name 'AdministrativeUnitId')
+            $au = @(Get-InspectorSnapshotIndexSingle -Index $administrativeUnitById -Key $auId | Select-Object -First 1)
+            $relationships.Add((New-InspectorRelationship -RelationshipType 'MemberOfAdministrativeUnit' -SourceObjectId $objectId -SourceObjectType $objectType -TargetObjectId $auId -TargetObjectType 'AdministrativeUnit' -TargetDisplayName $(if ($au.Count -gt 0) { [string](Get-InspectorSnapshotProperty -InputObject $au[0] -Name 'displayName') } else { $auId }) -Metadata @{ AdministrativeUnitId = $auId; AdministrativeUnitDisplayName = $(if ($au.Count -gt 0) { [string](Get-InspectorSnapshotProperty -InputObject $au[0] -Name 'displayName') } else { '' }); AdministrativeUnitVisibility = $(if ($au.Count -gt 0) { [string](Get-InspectorSnapshotProperty -InputObject $au[0] -Name 'visibility') } else { '' }); AdministrativeUnitRestrictedManagement = $(if ($au.Count -gt 0) { Get-InspectorSnapshotProperty -InputObject $au[0] -Name 'isMemberManagementRestricted' } else { $null }) } -EvidenceId ([string](Get-InspectorSnapshotProperty -InputObject $auMemberRow -Name 'EvidenceId') )))
+        }
+
+        if ($objectType -eq 'User') {
+            foreach ($riskyUser in @(Get-InspectorSnapshotIndexSingle -Index $riskyUsersByUserId -Key $objectId)) {
+                $artifacts.Add([PSCustomObject][ordered]@{
+                    PSTypeName = 'EntraObjectInspector.RiskyUserArtifact'
+                    ArtifactType = 'RiskyUserContext'
+                    SourceObjectType = 'User'
+                    SourceObjectId = $objectId
+                    RiskLevel = [string](Get-InspectorSnapshotProperty -InputObject $riskyUser -Name 'riskLevel')
+                    RiskState = [string](Get-InspectorSnapshotProperty -InputObject $riskyUser -Name 'riskState')
+                    RiskDetail = [string](Get-InspectorSnapshotProperty -InputObject $riskyUser -Name 'riskDetail')
+                    RiskLastUpdatedDateTime = Get-InspectorSnapshotProperty -InputObject $riskyUser -Name 'riskLastUpdatedDateTime'
+                    IsDeleted = Get-InspectorSnapshotProperty -InputObject $riskyUser -Name 'isDeleted'
+                    IsProcessing = Get-InspectorSnapshotProperty -InputObject $riskyUser -Name 'isProcessing'
+                    EvidenceId = [string](Get-InspectorSnapshotProperty -InputObject $riskyUser -Name 'EvidenceId')
+                })
+            }
         }
 
         # Include every object-scoped snapshot query for this candidate, even

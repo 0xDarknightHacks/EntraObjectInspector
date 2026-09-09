@@ -117,6 +117,71 @@ Describe 'Security Observation Engine' {
                 Should -Be 'OBS-D3F9A73314DF2D07'
         }
 
+        It 'normalizes live DateTimeOffset and portable ISO timestamps to the same UTC instant' {
+            $live = [datetimeoffset]::ParseExact(
+                '2026-07-29T10:33:58.1234567+02:00',
+                'o',
+                [System.Globalization.CultureInfo]::InvariantCulture
+            )
+            $portable = '2026-07-29T08:33:58.1234567Z'
+
+            $liveNormalized = Get-InspectorObservationDate -Value $live
+            $portableNormalized = Get-InspectorObservationDate -Value $portable
+
+            $liveNormalized.Kind | Should -Be ([System.DateTimeKind]::Utc)
+            $portableNormalized.Kind | Should -Be ([System.DateTimeKind]::Utc)
+            $liveNormalized.Ticks | Should -Be $portableNormalized.Ticks
+            $liveNormalized.ToString('o') | Should -Be '2026-07-29T08:33:58.1234567Z'
+        }
+
+        It 'treats unspecified live Graph DateTime values as UTC rather than host-local time' {
+            $liveUnspecified = [datetime]::SpecifyKind(
+                [datetime]::ParseExact('2026-07-29T08:33:58.1234567', 'yyyy-MM-ddTHH:mm:ss.fffffff', [System.Globalization.CultureInfo]::InvariantCulture),
+                [System.DateTimeKind]::Unspecified
+            )
+            $portable = '2026-07-29T08:33:58.1234567Z'
+
+            (Get-InspectorObservationDate -Value $liveUnspecified).Ticks |
+                Should -Be (Get-InspectorObservationDate -Value $portable).Ticks
+        }
+
+        It 'produces identical temporal credential observations for live DateTimeOffset and portable ISO shapes' {
+            Mock Get-Date { [datetime]'2026-09-09T09:00:00Z' }
+
+            $source = New-TestSourceObject -ObjectType 'Application' -ObjectId 'app-1' -Properties @{ DisplayName = 'Replay App' }
+            $liveArtifacts = @(
+                [PSCustomObject]@{
+                    ArtifactType='CredentialMetadata'; CredentialType='Password'; SourceObjectType='Application'; SourceObjectId='app-1'; KeyId='key-1'; DisplayName='key-1';
+                    StartDateTime=[datetimeoffset]'2026-01-01T02:00:00+02:00'; EndDateTime=[datetimeoffset]'2027-01-01T02:00:00+02:00'; EvidenceId='ev-cred-1'
+                },
+                [PSCustomObject]@{
+                    ArtifactType='CredentialMetadata'; CredentialType='Password'; SourceObjectType='Application'; SourceObjectId='app-1'; KeyId='key-2'; DisplayName='key-2';
+                    StartDateTime=[datetimeoffset]'2026-01-15T02:00:00+02:00'; EndDateTime=[datetimeoffset]'2026-12-31T02:00:00+02:00'; EvidenceId='ev-cred-2'
+                }
+            )
+            $portableArtifacts = @(
+                [PSCustomObject]@{
+                    ArtifactType='CredentialMetadata'; CredentialType='Password'; SourceObjectType='Application'; SourceObjectId='app-1'; KeyId='key-1'; DisplayName='key-1';
+                    StartDateTime='2026-01-01T00:00:00.0000000Z'; EndDateTime='2027-01-01T00:00:00.0000000Z'; EvidenceId='ev-cred-1'
+                },
+                [PSCustomObject]@{
+                    ArtifactType='CredentialMetadata'; CredentialType='Password'; SourceObjectType='Application'; SourceObjectId='app-1'; KeyId='key-2'; DisplayName='key-2';
+                    StartDateTime='2026-01-15T00:00:00.0000000Z'; EndDateTime='2026-12-31T00:00:00.0000000Z'; EvidenceId='ev-cred-2'
+                }
+            )
+
+            $liveResult = Invoke-InspectorObservationEngine -ObjectInsight (New-TestObjectInsight -SourceObjects @($source) -Artifacts $liveArtifacts)
+            $portableResult = Invoke-InspectorObservationEngine -ObjectInsight (New-TestObjectInsight -SourceObjects @($source) -Artifacts $portableArtifacts)
+            $titles = @('Multiple active client secrets','Overlapping credential validity windows')
+            $liveTemporal = @($liveResult.Observations | Where-Object Title -in $titles | Sort-Object Title)
+            $portableTemporal = @($portableResult.Observations | Where-Object Title -in $titles | Sort-Object Title)
+
+            $liveTemporal.Count | Should -Be 2
+            $portableTemporal.Count | Should -Be 2
+            ($liveTemporal | ConvertTo-Json -Depth 20 -Compress) |
+                Should -Be ($portableTemporal | ConvertTo-Json -Depth 20 -Compress)
+        }
+
         It 'returns the required observation engine envelope without Graph calls' {
             $insight = New-TestObjectInsight
 
@@ -530,6 +595,104 @@ Describe 'Security Observation Engine' {
                 Should -Not -BeNullOrEmpty
         }
 
+        It 'emits contextual PIM active and eligible directory role state' {
+            $user = New-TestSourceObject -ObjectType 'User' -ObjectId 'user-1' -Properties @{ DisplayName = 'Privileged User' }
+            $active = New-TestRelationship -RelationshipType 'ActiveDirectoryRoleScheduleInstance' -SourceObjectId 'user-1' -TargetObjectType 'DirectoryRoleDefinition' -TargetObjectId 'role-def-1' -TargetDisplayName 'Privileged Role' -EvidenceId 'ev-active' -Metadata @{ RoleDefinitionId = 'role-def-1'; RoleDisplayName = 'Privileged Role'; ScopeType = 'Tenant'; ScheduleInstanceId = 'active-1'; StartDateTime = '2026-01-01T00:00:00Z'; EndDateTime = $null; MemberType = 'Direct' }
+            $eligible = New-TestRelationship -RelationshipType 'EligibleDirectoryRoleScheduleInstance' -SourceObjectId 'user-1' -TargetObjectType 'DirectoryRoleDefinition' -TargetObjectId 'role-def-1' -TargetDisplayName 'Privileged Role' -EvidenceId 'ev-eligible' -Metadata @{ RoleDefinitionId = 'role-def-1'; RoleDisplayName = 'Privileged Role'; ScopeType = 'Tenant'; ScheduleInstanceId = 'eligible-1'; StartDateTime = '2026-01-01T00:00:00Z'; EndDateTime = '2026-12-31T00:00:00Z'; MemberType = 'Direct' }
+
+            $result = Invoke-InspectorObservationEngine -ObjectInsight (New-TestObjectInsight -SourceObjects @($user) -Relationships @($active, $eligible))
+
+            $activeObservation = Get-ObservationByTitle -Result $result -Title 'Principal has active PIM directory role state'
+            $eligibleObservation = Get-ObservationByTitle -Result $result -Title 'Principal has eligible PIM directory role state'
+
+            $activeObservation | Should -Not -BeNullOrEmpty
+            $activeObservation.FindingEligible | Should -BeFalse
+            $activeObservation.Metadata.AssignmentDurationState | Should -Be 'Permanent'
+            $activeObservation.EvidenceIds | Should -Contain 'ev-active'
+            $eligibleObservation | Should -Not -BeNullOrEmpty
+            $eligibleObservation.FindingEligible | Should -BeFalse
+            $eligibleObservation.Metadata.AssignmentDurationState | Should -Be 'TimeBound'
+            $eligibleObservation.EvidenceIds | Should -Contain 'ev-eligible'
+        }
+
+        It 'correlates risky-user state with active privileged context without inferring compromise' {
+            $user = New-TestSourceObject -ObjectType 'User' -ObjectId 'user-1' -Properties @{ DisplayName = 'Risky Privileged User' }
+            $active = New-TestRelationship -RelationshipType 'ActiveDirectoryRoleScheduleInstance' -SourceObjectId 'user-1' -TargetObjectType 'DirectoryRoleDefinition' -TargetObjectId 'role-def-1' -TargetDisplayName 'Privileged Role' -EvidenceId 'ev-active' -Metadata @{ RoleDefinitionId = 'role-def-1'; RoleDisplayName = 'Privileged Role'; ScopeType = 'Tenant'; ScheduleInstanceId = 'active-1' }
+            $risk = [PSCustomObject]@{
+                ArtifactType = 'RiskyUserContext'
+                SourceObjectType = 'User'
+                SourceObjectId = 'user-1'
+                RiskLevel = 'high'
+                RiskState = 'atRisk'
+                RiskDetail = 'adminConfirmedUserCompromised'
+                RiskLastUpdatedDateTime = '2026-01-02T00:00:00Z'
+                EvidenceId = 'ev-risk'
+            }
+
+            $result = Invoke-InspectorObservationEngine -ObjectInsight (New-TestObjectInsight -SourceObjects @($user) -Relationships @($active) -Artifacts @($risk))
+            $observation = Get-ObservationByTitle -Result $result -Title 'Risky user has active privileged context'
+
+            $observation | Should -Not -BeNullOrEmpty
+            $observation.FindingEligible | Should -BeTrue
+            $observation.Severity | Should -Be 'High'
+            $observation.EvidenceIds | Should -Contain 'ev-risk'
+            $observation.EvidenceIds | Should -Contain 'ev-active'
+            $observation.Limitations | Should -Contain 'Risky-user data is licensing and retention dependent, and does not by itself prove compromise.'
+        }
+
+        It 'gates privileged risky-user findings on current unresolved riskState' {
+            $states = @(
+                @{ State = 'atRisk'; Eligible = $true },
+                @{ State = 'confirmedCompromised'; Eligible = $true },
+                @{ State = 'remediated'; Eligible = $false },
+                @{ State = 'dismissed'; Eligible = $false },
+                @{ State = 'confirmedSafe'; Eligible = $false },
+                @{ State = 'none'; Eligible = $false },
+                @{ State = 'unknownFutureValue'; Eligible = $false }
+            )
+
+            foreach ($stateCase in $states) {
+                $userId = "user-$($stateCase.State)"
+                $user = New-TestSourceObject -ObjectType 'User' -ObjectId $userId -Properties @{ DisplayName = $userId }
+                $active = New-TestRelationship -RelationshipType 'AssignedDirectoryRole' -SourceObjectId $userId -TargetObjectType 'DirectoryRoleDefinition' -TargetObjectId 'role-def-1' -TargetDisplayName 'Privileged Role' -EvidenceId "ev-role-$userId" -Metadata @{ RoleDefinitionId = 'role-def-1'; RoleDisplayName = 'Privileged Role'; ScopeType = 'Tenant'; EvidenceIds = @("ev-role-$userId", "ev-active-$userId") }
+                $risk = [PSCustomObject]@{
+                    ArtifactType = 'RiskyUserContext'
+                    SourceObjectType = 'User'
+                    SourceObjectId = $userId
+                    RiskLevel = 'high'
+                    RiskState = $stateCase.State
+                    RiskDetail = 'test'
+                    EvidenceId = "ev-risk-$userId"
+                }
+
+                $result = Invoke-InspectorObservationEngine -ObjectInsight (New-TestObjectInsight -SourceObjects @($user) -Relationships @($active) -Artifacts @($risk))
+                $riskObservation = @($result.Observations | Where-Object { (Get-InspectorObservationMetadataValue -InputObject $_ -Name 'RelationshipType') -eq 'RiskyUserContext' -and $_.AffectedObject.ObjectId -eq $userId })[0]
+
+                $riskObservation.FindingEligible | Should -Be ([bool]$stateCase.Eligible)
+                $riskObservation.Metadata.CurrentRiskStateActionable | Should -Be ([bool]$stateCase.Eligible)
+                $riskObservation.EvidenceIds | Should -Contain "ev-risk-$userId"
+                $riskObservation.EvidenceIds | Should -Contain "ev-active-$userId"
+            }
+        }
+
+        It 'keeps risky-user context non-actionable without active privilege' {
+            $user = New-TestSourceObject -ObjectType 'User' -ObjectId 'user-risk-only' -Properties @{ DisplayName = 'Risk Only' }
+            $risk = [PSCustomObject]@{
+                ArtifactType = 'RiskyUserContext'
+                SourceObjectType = 'User'
+                SourceObjectId = 'user-risk-only'
+                RiskLevel = 'high'
+                RiskState = 'atRisk'
+                EvidenceId = 'ev-risk-only'
+            }
+
+            $result = Invoke-InspectorObservationEngine -ObjectInsight (New-TestObjectInsight -SourceObjects @($user) -Artifacts @($risk))
+            $riskObservation = @($result.Observations | Where-Object { (Get-InspectorObservationMetadataValue -InputObject $_ -Name 'RelationshipType') -eq 'RiskyUserContext' })[0]
+
+            $riskObservation.FindingEligible | Should -BeFalse
+            $riskObservation.Metadata.SignalDisposition | Should -Be 'Contextual'
+        }
+
         It 'detects role-assignable groups' {
             $group = New-TestSourceObject -ObjectType 'Group' -ObjectId 'group-1' -Properties @{ DisplayName = 'Role Group'; IsAssignableToRole = $true }
 
@@ -594,6 +757,27 @@ Describe 'Security Observation Engine' {
 
             (Get-ObservationByTitle -Result $result -Title 'Group is nested into privileged group') |
                 Should -Not -BeNullOrEmpty
+        }
+
+        It 'preserves late-source relationship observations when relationship volume is high' {
+            $groups = 1..25 | ForEach-Object {
+                New-TestSourceObject -ObjectType 'Group' -ObjectId "group-$_" -Properties @{ DisplayName = "Group $_"; IsAssignableToRole = $false }
+            }
+            $relationships = foreach ($index in 1..25) {
+                foreach ($memberIndex in 1..20) {
+                    New-TestRelationship -RelationshipType 'HasMember' -SourceObjectId "group-$index" -TargetObjectType 'User' -TargetObjectId "user-$memberIndex" -EvidenceId "ev-member-$index-$memberIndex"
+                }
+            }
+            $relationships += New-TestRelationship -RelationshipType 'AssignedDirectoryRole' -SourceObjectId 'group-25' -TargetObjectType 'DirectoryRoleDefinition' -TargetObjectId 'role-25' -EvidenceId 'ev-role-25' -Metadata @{ AssignmentId = 'assignment-25'; PrincipalId = 'group-25'; RoleDefinitionId = 'role-25'; RoleDisplayName = 'Privileged Role'; DirectoryScopeId = '/' }
+
+            $result = Invoke-InspectorObservationEngine -ObjectInsight (New-TestObjectInsight -SourceObjects $groups -Relationships $relationships)
+            $observation = @($result.Observations | Where-Object { $_.Title -eq 'Privileged group has members' -and $_.AffectedObject.ObjectId -eq 'group-25' })[0]
+
+            $observation | Should -Not -BeNullOrEmpty
+            $observation.Metadata.MemberCount | Should -Be 20
+            $observation.Metadata.DirectoryRoleRelationshipCount | Should -Be 1
+            @($observation.EvidenceIds) | Should -Contain 'ev-role-25'
+            @($observation.EvidenceIds) | Should -Contain 'ev-member-25-20'
         }
 
         It 'returns observations with the required schema fields' {

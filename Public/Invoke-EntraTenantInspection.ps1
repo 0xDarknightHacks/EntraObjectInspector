@@ -541,6 +541,11 @@ function Invoke-EntraTenantInspection {
             -InputObject $snapshot `
             -Name 'AssessmentCoverage'
 
+    $tenantCapabilities =
+        Get-InspectorObjectInsightProperty `
+            -InputObject $snapshot `
+            -Name 'TenantCapabilities'
+
     $result = [PSCustomObject][ordered]@{
         PSTypeName                      = 'EntraObjectInspector.TenantInspectionResult'
         SchemaVersion                   = '0.7.0'
@@ -563,6 +568,7 @@ function Invoke-EntraTenantInspection {
         GraphCallsAfterSnapshot         = $graphCallsAfterSnapshot
         Discovery                       = $discovery
         AssessmentCoverage              = $assessmentCoverage
+        TenantCapabilities              = $tenantCapabilities
         Pipeline                        = $pipeline
         ObjectInsights                  = @($objectInsights)
         SecurityObservations            = @($securityObservations)
@@ -579,6 +585,7 @@ function Invoke-EntraTenantInspection {
             TenantDisplayName           = Get-InspectorObjectInsightProperty -InputObject $tenantMetadata -Name 'TenantDisplayName'
             TenantMetadata              = $tenantMetadata
             ScopeInventory              = $scopeInventory
+            TenantCapabilities          = $tenantCapabilities
             AssessmentCoverage          = $assessmentCoverage
             DiscoveredCount             = $discovery.TotalCount
             ProcessedCount              = $pipeline.ProcessedCount

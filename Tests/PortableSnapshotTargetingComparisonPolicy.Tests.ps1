@@ -12,7 +12,13 @@ Describe 'Portable snapshot, targeting, comparison, and policy primitives' {
                     [object[]]$ApplicationCredentials = @(),
                     [object[]]$GroupMembers = @(),
                     [object[]]$RequiredResourceAccess = @(),
-                    [object[]]$OAuth2PermissionGrants = @()
+                    [object[]]$OAuth2PermissionGrants = @(),
+                    [object[]]$DirectoryRoleAssignments = @(),
+                    [object[]]$RoleAssignmentScheduleInstances = @(),
+                    [object[]]$RoleEligibilityScheduleInstances = @(),
+                    [object[]]$AdministrativeUnits = @(),
+                    [object[]]$AdministrativeUnitMembers = @(),
+                    [object[]]$RiskyUsers = @()
                 )
 
                 $collections = [PSCustomObject][ordered]@{
@@ -22,7 +28,14 @@ Describe 'Portable snapshot, targeting, comparison, and policy primitives' {
                     Groups = @([PSCustomObject]@{ id='group-1'; displayName='Group One'; EvidenceId="ev-group-$SnapshotId" })
                     Organization = @([PSCustomObject]@{ id='tenant-1'; displayName='Contoso'; EvidenceId="ev-org-$SnapshotId" })
                     OAuth2PermissionGrants = @($OAuth2PermissionGrants)
-                    DirectoryRoleAssignments = @()
+                    DirectoryRoleDefinitions = @()
+                    DirectoryRoleAssignments = @($DirectoryRoleAssignments)
+                    RoleAssignmentScheduleInstances = @($RoleAssignmentScheduleInstances)
+                    RoleEligibilityScheduleInstances = @($RoleEligibilityScheduleInstances)
+                    AdministrativeUnits = @($AdministrativeUnits)
+                    AdministrativeUnitMembers = @($AdministrativeUnitMembers)
+                    AdministrativeUnitScopedRoleMembers = @()
+                    RiskyUsers = @($RiskyUsers)
                     ApplicationOwners = @($ApplicationOwners)
                     ServicePrincipalOwners = @()
                     ServicePrincipalOwnedObjects = @()
@@ -120,8 +133,63 @@ Describe 'Portable snapshot, targeting, comparison, and policy primitives' {
             $imported.SnapshotId | Should -Be $snapshot.SnapshotId
             $imported.PersistenceMode | Should -Be 'PortableJsonImported'
             $imported.GraphCallsAllowedAfterSnapshot | Should -BeFalse
+            $imported.TenantMetadata.LicenseValidation.PrivilegedIdentityManagement.Status | Should -Be 'Unknown'
+            $imported.TenantMetadata.LicenseValidation.IdentityProtectionRiskyUsers.Status | Should -Be 'Unknown'
             $imported.Indexes.ApplicationByObjectId.ContainsKey('app-1') | Should -BeTrue
             Should -Invoke Invoke-InspectorGraphRequest -Times 0 -Exactly
+        }
+
+        It 'round-trips privileged identity context collections and rebuilds indexes' {
+            $path = Join-Path $TestDrive 'privileged-context-snapshot.json'
+            $snapshot = New-TestContractSnapshot `
+                -DirectoryRoleAssignments @([PSCustomObject]@{ id='assignment-1'; principalId='user-1'; roleDefinitionId='role-def-1'; directoryScopeId='/'; EvidenceId='ev-role' }) `
+                -RoleAssignmentScheduleInstances @([PSCustomObject]@{ id='active-1'; principalId='user-1'; roleDefinitionId='role-def-1'; directoryScopeId='/'; assignmentType='Assigned'; EvidenceId='ev-active' }) `
+                -RoleEligibilityScheduleInstances @([PSCustomObject]@{ id='eligible-1'; principalId='user-1'; roleDefinitionId='role-def-1'; directoryScopeId='/'; EvidenceId='ev-eligible' }) `
+                -AdministrativeUnits @([PSCustomObject]@{ id='au-1'; displayName='AU One'; EvidenceId='ev-au' }) `
+                -AdministrativeUnitMembers @([PSCustomObject]@{ AdministrativeUnitId='au-1'; Member=[PSCustomObject]@{ id='user-1'; displayName='User One' }; EvidenceId='ev-au-member' }) `
+                -RiskyUsers @([PSCustomObject]@{ id='user-1'; riskLevel='high'; riskState='atRisk'; EvidenceId='ev-risk' })
+
+            Export-InspectorTenantSnapshot -TenantSnapshot $snapshot -Path $path | Out-Null
+            $imported = Import-InspectorTenantSnapshot -Path $path
+
+            $imported.Collections.DirectoryRoleAssignments.Count | Should -Be 1
+            $imported.Collections.RoleAssignmentScheduleInstances.Count | Should -Be 1
+            $imported.Collections.RoleEligibilityScheduleInstances.Count | Should -Be 1
+            $imported.Collections.AdministrativeUnits.Count | Should -Be 1
+            $imported.Collections.AdministrativeUnitMembers.Count | Should -Be 1
+            $imported.Collections.RiskyUsers.Count | Should -Be 1
+            $imported.Indexes.DirectoryRoleAssignmentsByPrincipalId['user-1'].Count | Should -Be 1
+            $imported.Indexes.RoleAssignmentScheduleInstancesByPrincipalId['user-1'].Count | Should -Be 1
+            $imported.Indexes.RoleAssignmentScheduleInstancesByPrincipalId['user-1'][0].assignmentType | Should -Be 'Assigned'
+            $imported.Indexes.RoleEligibilityScheduleInstancesByPrincipalId['user-1'].Count | Should -Be 1
+            $imported.Indexes.AdministrativeUnitMembersByMemberId['user-1'].Count | Should -Be 1
+            $imported.Indexes.RiskyUsersByUserId['user-1'].Count | Should -Be 1
+        }
+
+        It 'reconciles overlapping RBAC and PIM active state into one canonical privilege relationship' {
+            $snapshot = New-TestContractSnapshot `
+                -DirectoryRoleAssignments @([PSCustomObject]@{ id='assignment-1'; principalId='user-1'; roleDefinitionId='role-def-1'; directoryScopeId='/'; EvidenceId='ev-role' }) `
+                -RoleAssignmentScheduleInstances @([PSCustomObject]@{ id='active-1'; principalId='user-1'; roleDefinitionId='role-def-1'; directoryScopeId='/'; assignmentType='Activated'; roleAssignmentOriginId='assignment-1'; roleAssignmentScheduleId='schedule-1'; startDateTime='2026-01-01T00:00:00Z'; endDateTime='2026-01-01T01:00:00Z'; memberType='Direct'; EvidenceId='ev-active' })
+            $snapshot | Add-Member -NotePropertyName Indexes -NotePropertyValue (New-InspectorTenantSnapshotIndexes -Collections $snapshot.Collections -Evidence $snapshot.Evidence) -Force
+            $resolution = [PSCustomObject]@{
+                DirectMatches = @([PSCustomObject]@{
+                    ObjectType = 'User'
+                    Identifiers = [PSCustomObject]@{ ObjectId = 'user-1' }
+                    RawObject = [PSCustomObject]@{ id='user-1'; displayName='User One'; userPrincipalName='user1@contoso.com'; EvidenceId='ev-user' }
+                    EvidenceId = 'ev-user'
+                })
+                RelatedObjects = @()
+            }
+
+            $relationships = (Get-InspectorSnapshotRelationships -Resolution $resolution -TenantSnapshot $snapshot).Relationships
+            $privilegedRelationships = @($relationships | Where-Object { $_.RelationshipType -in @('AssignedDirectoryRole','ActiveDirectoryRoleScheduleInstance') })
+
+            $privilegedRelationships.Count | Should -Be 1
+            $privilegedRelationships[0].RelationshipType | Should -Be 'ActiveDirectoryRoleScheduleInstance'
+            $privilegedRelationships[0].Metadata.AssignmentType | Should -Be 'Activated'
+            @($privilegedRelationships[0].Metadata.EvidenceIds) | Should -Contain 'ev-role'
+            @($privilegedRelationships[0].Metadata.EvidenceIds) | Should -Contain 'ev-active'
+            $privilegedRelationships[0].Metadata.EndDateTime | Should -Be '2026-01-01T01:00:00Z'
         }
 
         It 'rejects tampered portable snapshot content' {
@@ -250,6 +318,34 @@ Describe 'Portable snapshot, targeting, comparison, and policy primitives' {
             { Resolve-InspectorAssessmentTargets -TargetSpecification @($spec) -ObjectType @('Application','ServicePrincipal') } | Should -Throw '*ambiguous*'
         }
 
+        It 'uses documented targeted role-assignment query parameters without top' {
+            $script:targetedUris = [System.Collections.Generic.List[string]]::new()
+            Mock New-InspectorSnapshotCollectionResult {
+                param($Name, $Uri, $RequiredPermission, $EvidenceScope, $SubjectObjectType, $SubjectObjectId, $RuntimeTelemetry)
+                $script:targetedUris.Add([string]$Uri)
+                [PSCustomObject]@{
+                    Status='Success'; Items=@(); Limitations=@();
+                    Evidence=[PSCustomObject]@{ EvidenceId="ev-$Name"; QueryName=$Name; Status='Success'; Completeness='Complete' }
+                }
+            }
+            $targetResolution = [PSCustomObject]@{
+                Collections = [PSCustomObject]@{
+                    ServicePrincipals = @([PSCustomObject]@{ id='sp-1' })
+                    Users = @([PSCustomObject]@{ id='user-1' })
+                    Groups = @()
+                }
+            }
+
+            Get-InspectorTargetedTenantCollections -TargetResolution $targetResolution -RuntimeTelemetry $null | Out-Null
+
+            $script:targetedUris | Should -Contain "https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignments?`$filter=principalId%20eq%20%27user-1%27&`$expand=roleDefinition"
+            @($script:targetedUris | Where-Object { $_ -like '*roleManagement/directory/roleAssignments*' -and $_ -like '*$top=999*' }).Count | Should -Be 0
+            $script:targetedUris | Should -Contain "https://graph.microsoft.com/v1.0/oauth2PermissionGrants?`$filter=clientId%20eq%20%27sp-1%27"
+            $script:targetedUris | Should -Contain "https://graph.microsoft.com/v1.0/oauth2PermissionGrants?`$filter=resourceId%20eq%20%27sp-1%27"
+            @($script:targetedUris | Where-Object { $_ -like '*oauth2PermissionGrants*' -and ($_ -like '*$top=*' -or $_ -like '*$select=*') }).Count | Should -Be 0
+            (Get-InspectorTargetQueryDefinition -ObjectType 'ServicePrincipal' -Identity 'sp-1').Uri | Should -Match '\$top=100$'
+        }
+
         It 'fails target resolution when no exact target exists' {
             Mock New-InspectorSnapshotCollectionResult {
                 param($Name)
@@ -306,6 +402,100 @@ Describe 'Portable snapshot, targeting, comparison, and policy primitives' {
             $comparison.Changes.Category | Should -Contain 'OwnerAdded'
             $comparison.Changes.SemanticKey | Should -Contain 'Owner|Group|group-1|sp-owner-old'
             $comparison.Changes.SemanticKey | Should -Contain 'Owner|Group|group-1|sp-owner-new'
+        }
+
+        It 'emits deterministic privileged identity and risky-user drift records' {
+            $previous = New-TestContractSnapshot `
+                -SnapshotId 'previous' `
+                -DirectoryRoleAssignments @([PSCustomObject]@{ id='assignment-old'; principalId='user-1'; roleDefinitionId='role-def-old'; directoryScopeId='/'; EvidenceId='ev-role-previous' }) `
+                -RiskyUsers @([PSCustomObject]@{ id='user-1'; riskLevel='low'; riskState='atRisk'; riskDetail='none'; EvidenceId='ev-risk-previous' })
+
+            $current = New-TestContractSnapshot `
+                -SnapshotId 'current' `
+                -DirectoryRoleAssignments @([PSCustomObject]@{ id='assignment-new'; principalId='user-1'; roleDefinitionId='role-def-new'; directoryScopeId='/administrativeUnits/au-1'; EvidenceId='ev-role-current' }) `
+                -RoleAssignmentScheduleInstances @([PSCustomObject]@{ id='active-1'; principalId='user-1'; roleDefinitionId='role-def-new'; directoryScopeId='/administrativeUnits/au-1'; memberType='Direct'; assignmentType='Assigned'; roleAssignmentOriginId='assignment-new'; EvidenceId='ev-active-current' }) `
+                -AdministrativeUnits @([PSCustomObject]@{ id='au-1'; displayName='AU One'; EvidenceId='ev-au-current' }) `
+                -AdministrativeUnitMembers @([PSCustomObject]@{ AdministrativeUnitId='au-1'; Member=[PSCustomObject]@{ id='user-1' }; EvidenceId='ev-au-member-current' }) `
+                -RiskyUsers @([PSCustomObject]@{ id='user-1'; riskLevel='high'; riskState='atRisk'; riskDetail='adminConfirmedUserCompromised'; EvidenceId='ev-risk-current' })
+
+            $comparison = Compare-InspectorTenantSnapshots -PreviousSnapshot $previous -CurrentSnapshot $current
+
+            $comparison.Changes.Category | Should -Contain 'DirectoryRoleAssignmentRemoved'
+            $comparison.Changes.Category | Should -Contain 'DirectoryRoleAssignmentAdded'
+            $comparison.Changes.Category | Should -Not -Contain 'ActiveDirectoryRoleScheduleInstanceAdded'
+            $comparison.Changes.Category | Should -Contain 'AdministrativeUnitMemberAdded'
+            $comparison.Changes.Category | Should -Contain 'RiskyUserChanged'
+            @($comparison.Changes | Where-Object Category -eq 'RiskyUserChanged')[0].CurrentValue.RiskLevel | Should -Be 'high'
+        }
+
+        It 'suppresses an overlapping Assigned active schedule instance in comparison drift' {
+            $snapshot = New-TestContractSnapshot `
+                -DirectoryRoleAssignments @([PSCustomObject]@{ id='assignment-1'; principalId='user-1'; roleDefinitionId='role-def-1'; directoryScopeId='/'; EvidenceId='ev-role' }) `
+                -RoleAssignmentScheduleInstances @([PSCustomObject]@{ id='active-assigned'; principalId='user-1'; roleDefinitionId='role-def-1'; directoryScopeId='/'; assignmentType='Assigned'; roleAssignmentOriginId='assignment-1'; EvidenceId='ev-active' })
+
+            $records = @(ConvertTo-InspectorSnapshotComparableRecords -TenantSnapshot $snapshot)
+
+            @($records | Where-Object RecordType -eq 'DirectoryRoleAssignment').Count | Should -Be 1
+            @($records | Where-Object RecordType -eq 'ActiveDirectoryRoleScheduleInstance').Count | Should -Be 0
+        }
+
+        It 'retains an overlapping Activated schedule instance as active PIM comparison state' {
+            $snapshot = New-TestContractSnapshot `
+                -DirectoryRoleAssignments @([PSCustomObject]@{ id='assignment-1'; principalId='user-1'; roleDefinitionId='role-def-1'; directoryScopeId='/'; EvidenceId='ev-role' }) `
+                -RoleAssignmentScheduleInstances @([PSCustomObject]@{ id='active-activated'; principalId='user-1'; roleDefinitionId='role-def-1'; directoryScopeId='/'; assignmentType='Activated'; roleAssignmentOriginId='assignment-1'; memberType='Direct'; EvidenceId='ev-active' })
+
+            $records = @(ConvertTo-InspectorSnapshotComparableRecords -TenantSnapshot $snapshot)
+            $active = @($records | Where-Object RecordType -eq 'ActiveDirectoryRoleScheduleInstance')
+
+            @($records | Where-Object RecordType -eq 'DirectoryRoleAssignment').Count | Should -Be 1
+            $active.Count | Should -Be 1
+            $active[0].Value.AssignmentType | Should -Be 'Activated'
+        }
+
+        It 'emits active PIM drift when an overlapping assignment changes from Assigned to Activated' {
+            $previous = New-TestContractSnapshot `
+                -SnapshotId 'previous' `
+                -DirectoryRoleAssignments @([PSCustomObject]@{ id='assignment-1'; principalId='user-1'; roleDefinitionId='role-def-1'; directoryScopeId='/'; EvidenceId='ev-role-previous' }) `
+                -RoleAssignmentScheduleInstances @([PSCustomObject]@{ id='active-assigned'; principalId='user-1'; roleDefinitionId='role-def-1'; directoryScopeId='/'; assignmentType='Assigned'; roleAssignmentOriginId='assignment-1'; EvidenceId='ev-active-previous' })
+            $current = New-TestContractSnapshot `
+                -SnapshotId 'current' `
+                -DirectoryRoleAssignments @([PSCustomObject]@{ id='assignment-1'; principalId='user-1'; roleDefinitionId='role-def-1'; directoryScopeId='/'; EvidenceId='ev-role-current' }) `
+                -RoleAssignmentScheduleInstances @([PSCustomObject]@{ id='active-activated'; principalId='user-1'; roleDefinitionId='role-def-1'; directoryScopeId='/'; assignmentType='Activated'; roleAssignmentOriginId='assignment-1'; memberType='Direct'; EvidenceId='ev-active-current' })
+
+            $comparison = Compare-InspectorTenantSnapshots -PreviousSnapshot $previous -CurrentSnapshot $current
+
+            $comparison.Changes.Category | Should -Contain 'ActiveDirectoryRoleScheduleInstanceAdded'
+            @($comparison.Changes | Where-Object Category -eq 'DirectoryRoleAssignmentChanged').Count | Should -Be 0
+        }
+
+        It 'emits active PIM removal when an overlapping activation ends' {
+            $previous = New-TestContractSnapshot `
+                -SnapshotId 'previous' `
+                -DirectoryRoleAssignments @([PSCustomObject]@{ id='assignment-1'; principalId='user-1'; roleDefinitionId='role-def-1'; directoryScopeId='/'; EvidenceId='ev-role-previous' }) `
+                -RoleAssignmentScheduleInstances @([PSCustomObject]@{ id='active-activated'; principalId='user-1'; roleDefinitionId='role-def-1'; directoryScopeId='/'; assignmentType='Activated'; roleAssignmentOriginId='assignment-1'; memberType='Direct'; EvidenceId='ev-active-previous' })
+            $current = New-TestContractSnapshot `
+                -SnapshotId 'current' `
+                -DirectoryRoleAssignments @([PSCustomObject]@{ id='assignment-1'; principalId='user-1'; roleDefinitionId='role-def-1'; directoryScopeId='/'; EvidenceId='ev-role-current' })
+
+            $comparison = Compare-InspectorTenantSnapshots -PreviousSnapshot $previous -CurrentSnapshot $current
+
+            $comparison.Changes.Category | Should -Contain 'ActiveDirectoryRoleScheduleInstanceRemoved'
+            @($comparison.Changes | Where-Object Category -eq 'DirectoryRoleAssignmentChanged').Count | Should -Be 0
+        }
+
+        It 'retains unmatched active schedule instances regardless of assignment type' {
+            $snapshot = New-TestContractSnapshot `
+                -RoleAssignmentScheduleInstances @(
+                    [PSCustomObject]@{ id='active-unmatched-assigned'; principalId='user-1'; roleDefinitionId='role-def-1'; directoryScopeId='/'; assignmentType='Assigned'; roleAssignmentOriginId='missing-assignment'; EvidenceId='ev-active-assigned' },
+                    [PSCustomObject]@{ id='active-unmatched-activated'; principalId='user-1'; roleDefinitionId='role-def-2'; directoryScopeId='/'; assignmentType='Activated'; roleAssignmentOriginId='missing-activation'; EvidenceId='ev-active-activated' }
+                )
+
+            $records = @(ConvertTo-InspectorSnapshotComparableRecords -TenantSnapshot $snapshot)
+            $active = @($records | Where-Object RecordType -eq 'ActiveDirectoryRoleScheduleInstance')
+
+            $active.Count | Should -Be 2
+            $active.Value.AssignmentType | Should -Contain 'Activated'
+            $active.Value.AssignmentType | Should -Contain 'Assigned'
         }
 
         It 'does not emit definitive group-owner drift when owner evidence is explicitly incomplete' {
