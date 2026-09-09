@@ -45,9 +45,9 @@ Permissions depend on the objects and relationships being assessed. The collecti
 - `GroupMember.Read.All`
 - `Member.Read.Hidden` when hidden group membership is in scope
 - `Directory.Read.All`
-- `RoleManagement.Read.Directory`
-- `RoleAssignmentSchedule.Read.Directory` for current active PIM directory-role schedule instances
-- `RoleEligibilitySchedule.Read.Directory` for current eligible PIM directory-role schedule instances
+- `RoleAssignmentSchedule.Read.Directory` as the least-privileged application permission for current active PIM directory-role schedule instances
+- `RoleEligibilitySchedule.Read.Directory` as the least-privileged application permission for current eligible PIM directory-role schedule instances
+- `RoleManagement.Read.Directory` as a broader accepted application permission for role-management reads where Microsoft documents it
 - `AdministrativeUnit.Read.All` for Administrative Unit scope and membership context
 - `IdentityRiskyUser.Read.All` for Microsoft Entra ID Protection risky-user context
 
