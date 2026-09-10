@@ -9,7 +9,7 @@
 [![Tests](https://img.shields.io/badge/tests-349%2F349%20passing-brightgreen)](#validation)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-Entra Object Inspector collects tenant data through Microsoft Graph, builds a deterministic snapshot, correlates identities and relationships, and produces evidence-backed findings and self-contained HTML reports — **read-only, no remediation, no numerical risk scores, no attack-path execution.**
+Entra Object Inspector collects tenant data through Microsoft Graph, builds a deterministic snapshot, correlates identities and relationships, and produces evidence-backed findings and self-contained HTML reports.
 
 [Quick start](#quick-start) · [What it covers](#what-it-covers) · [Requirements](#requirements) · [Permissions](#permissions) · [Docs](#usage) · [Security model](#security-model)
 
