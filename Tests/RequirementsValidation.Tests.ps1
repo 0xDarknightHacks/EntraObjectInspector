@@ -40,7 +40,7 @@ Describe 'Requirements validation helper' {
         $manifest = Import-PowerShellDataFile -LiteralPath $modulePath
         $scriptContent = Get-Content -LiteralPath $scriptPath -Raw
 
-        [version]$manifest.ModuleVersion | Should -Be ([version]'1.1.0')
+        [version]$manifest.ModuleVersion | Should -Be ([version]'1.0.3')
         [version]$manifest.PowerShellVersion | Should -Be ([version]'7.6')
         $scriptContent | Should -Match "\[Version\]'7\.6'"
 
