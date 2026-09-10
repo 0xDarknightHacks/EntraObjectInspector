@@ -1,7 +1,7 @@
 @{
     RootModule = 'EntraObjectInspector.psm1'
 
-    ModuleVersion = '1.1.0'
+    ModuleVersion = '1.0.3'
 
     GUID = '3c8c54d6-218b-4a51-a3c7-41f908e6fd79'
 
@@ -53,3 +53,4 @@ evidence-backed object inspection through Microsoft Graph.
         }
     }
 }
+

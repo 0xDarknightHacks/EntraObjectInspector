@@ -1,78 +1,67 @@
 # Entra Object Inspector
 
-Entra Object Inspector is a read-only PowerShell tool for assessing Microsoft Entra ID objects and relationships through Microsoft Graph. It inspects users, groups, applications, and service principals, preserves supporting evidence, generates assessment findings, and exports structured artifacts and self-contained HTML reports.
+**Current release: v1.0.3**
 
-Current module release: **1.1.0**.
+Entra Object Inspector is a read-only PowerShell assessment tool for Microsoft Entra ID. It collects tenant data through Microsoft Graph, builds a deterministic snapshot, correlates identities and relationships, and produces evidence-backed findings and self-contained HTML reports.
 
-## Scope
+It is designed for assessment and investigation only. It does **not** remediate tenant configuration, calculate numerical risk scores, or execute attack/privilege paths.
 
-The tool supports:
+## What it covers
 
-- Users
-- Groups
-- Application registrations
-- Service principals / enterprise applications
-- Correlated application identities
-- Ownership, membership, permission, and app-role relationship evidence
-- Privileged identity context for directory role assignments, current PIM role state, Administrative Unit scope, and risky-user state
-- Tenant-wide assessment
-- JSON, CSV, Markdown, and static HTML reporting
+- Users and groups
+- Application registrations and service principals
+- Ownership, membership, permissions, and app-role relationships
+- Directory roles and privileged / role-assignable groups
+- Active and eligible PIM role schedule instances
+- Administrative Unit scope
+- Risky-user privilege correlation
+- Cross-object security observations
+- Portable offline snapshots
+- Snapshot comparison / drift assessment
+- Targeted assessments
+- Rule packs and accepted-condition baselines
+- JSON, CSV, Markdown, diagnostics, evidence, and HTML reporting
 
-Entra Object Inspector is assessment-only. It does **not** remediate, modify tenant configuration, perform risk/exposure scoring, or execute attack/privilege-path analysis.
+## Screenshots
 
-Tenant-wide assessments use a snapshot-first model. Microsoft Graph is used to collect the required tenant data; subsequent resolution, relationship processing, observations, assessment intelligence, exports, and reports operate offline against the collected data.
+> **Screenshot placeholder — CLI assessment summary**  
+> Suggested image: a successful `Invoke-EntraSecurityAssessment` run showing mode, Graph statistics, package status, and report path.  
+> Suggested path: `docs/images/cli-assessment-summary.png`
+
+<!-- ![CLI assessment summary](docs/images/cli-assessment-summary.png) -->
+
+> **Screenshot placeholder — main HTML report**  
+> Suggested image: the report overview showing severity metrics, grouped findings, and tenant context.  
+> Suggested path: `docs/images/report-overview.png`
+
+<!-- ![Main HTML report](docs/images/report-overview.png) -->
+
+> **Screenshot placeholder — finding evidence drill-down**  
+> Suggested image: one grouped finding showing affected objects, why it matters, supporting evidence, and Entra navigation.  
+> Suggested path: `docs/images/finding-evidence.png`
+
+<!-- ![Finding evidence drill-down](docs/images/finding-evidence.png) -->
 
 ## Requirements
 
 - PowerShell 7.6 LTS or later
 - Microsoft Entra application registration
 - App-only Microsoft Graph authentication using a client secret
-- Required Microsoft Graph application permissions with admin consent
+- Microsoft Graph application permissions appropriate to the assessment scope
 
-Release-validated dependencies:
+Release-validated module dependencies:
 
 | Dependency | Version |
 | --- | ---: |
 | `Microsoft.Graph.Authentication` | 2.39.0 |
 | `Microsoft.PowerShell.SecretManagement` | 1.1.2 |
 | `Microsoft.PowerShell.SecretStore` | 1.0.6 |
-| `Pester` (development only) | 6.1.0 |
 
-### Microsoft Graph permissions
+The full tenant-wide feature set can require permissions including `Application.Read.All`, `User.Read.All`, `GroupMember.Read.All`, `Directory.Read.All`, PIM schedule read permissions, `AdministrativeUnit.Read.All`, and `IdentityRiskyUser.Read.All`. `Member.Read.Hidden` is needed when hidden membership is in scope.
 
-Permissions depend on the objects and relationships being assessed. The collection logic uses:
+Use the least-privilege permission set appropriate to the assessment you intend to run.
 
-- `Application.Read.All`
-- `User.Read.All`
-- `GroupMember.Read.All`
-- `Member.Read.Hidden` when hidden group membership is in scope
-- `Directory.Read.All`
-- `RoleAssignmentSchedule.Read.Directory` as the least-privileged application permission for current active PIM directory-role schedule instances
-- `RoleEligibilitySchedule.Read.Directory` as the least-privileged application permission for current eligible PIM directory-role schedule instances
-- `RoleManagement.Read.Directory` as a broader accepted application permission for role-management reads where Microsoft documents it
-- `AdministrativeUnit.Read.All` for Administrative Unit scope and membership context
-- `IdentityRiskyUser.Read.All` for Microsoft Entra ID Protection risky-user context
-
-`Organization.Read.All` is optional. It is used for organization metadata and, when granted, also authorizes the optional `/subscribedSkus` tenant-license capability inventory. The project's existing `Directory.Read.All` permission also authorizes `/subscribedSkus`; therefore a normal full assessment does not need an additional license-inventory permission. For a reduced permission set that has neither `Directory.Read.All` nor `Organization.Read.All`, `LicenseAssignment.Read.All` is the least-privileged standalone permission for `/subscribedSkus`. License inventory evidence is advisory and is not itself required for assessment coverage.
-
-`Member.Read.Hidden` remains optional. Without it, hidden group or HiddenMembership Administrative Unit membership is marked partial and the assessment fails closed for membership completeness rather than treating inaccessible membership as empty.
-
-### Tenant license capability validation
-
-Tenant-wide assessments optionally read Microsoft Graph `/subscribedSkus` before collecting licensed privileged-identity domains. The check is capability-aware rather than a blanket "P2 tenant" requirement:
-
-- PIM current active/eligible schedule-instance collection requires a valid Microsoft Entra ID P2 entitlement **or** Microsoft Entra ID Governance. Microsoft Entra Suite includes ID Governance.
-- Full Microsoft Entra ID Protection risky-user Graph access requires Microsoft Entra ID P2 **or** Microsoft Entra Suite.
-- Microsoft 365 Business Premium includes Microsoft Entra ID P1; Business Premium alone therefore does not satisfy either capability. Add-on products can change that result, so the collector evaluates provisioned service-plan identifiers rather than product display names.
-- Directory role definitions/assignments and Administrative Unit collection are not blanket-gated by this PIM/Identity Protection license check.
-
-When license inventory conclusively shows that a required capability is unavailable, the corresponding PIM or risky-user request is not sent. Its evidence is recorded as `LicenseUnavailable / Partial`, the limitation is explicit, and release eligibility remains false rather than treating the inaccessible domain as a successful empty collection. If `/subscribedSkus` cannot be read, license prevalidation remains `Unknown`; the feature endpoints are still attempted and their evidence remains authoritative.
-
-This is a **tenant capability** check only. It does not validate per-user seat assignment, license quantity, or Microsoft licensing compliance.
-
-Use the least-privilege permission set appropriate for the intended assessment scope.
-
-## Installation
+## Install
 
 ```powershell
 git clone https://github.com/0xDarknightHacks/EntraObjectInspector.git
@@ -85,13 +74,13 @@ Install-Module Microsoft.PowerShell.SecretStore -RequiredVersion 1.0.6 -Scope Cu
 Import-Module .\EntraObjectInspector.psd1 -Force
 ```
 
-Validate the local runtime and module requirements:
+Validate the local environment:
 
 ```powershell
 .\Scripts\Test-EntraObjectInspectorRequirements.ps1
 ```
 
-## Configuration
+## Configure authentication
 
 Create the local configuration file:
 
@@ -104,7 +93,7 @@ New-Item -ItemType Directory -Path "$HOME\.entra-object-inspector" -Force
 } | ConvertTo-Json | Set-Content "$HOME\.entra-object-inspector\config.json"
 ```
 
-Store the application client secret with PowerShell SecretManagement:
+Store the client secret with PowerShell SecretManagement:
 
 ```powershell
 Register-SecretVault `
@@ -117,232 +106,112 @@ Set-Secret `
     -Secret "<client-secret>"
 ```
 
-Do not commit tenant identifiers, credentials, local configuration, assessment exports, reports, or diagnostics.
+Do not commit tenant identifiers, secrets, snapshots, reports, diagnostics, or exported assessment data.
 
-## Run an Assessment
+## Run an assessment
 
-For a complete tenant assessment:
+### Live tenant assessment
 
 ```powershell
 Invoke-EntraSecurityAssessment `
-    -AssessmentName "Contoso Entra Assessment" `
+    -AssessmentName "Tenant Assessment" `
     -OutputDirectory ".\EntraObjectInspector-Exports"
 ```
 
-To open the generated report after generation:
+### Live assessment and save a portable snapshot
 
 ```powershell
 Invoke-EntraSecurityAssessment `
-    -AssessmentName "Contoso Entra Assessment" `
-    -OutputDirectory ".\EntraObjectInspector-Exports" `
-    -OpenReport
+    -AssessmentName "Tenant Assessment" `
+    -SaveSnapshotPath ".\snapshots\tenant.json"
 ```
 
-The command performs authentication, snapshot collection, tenant inspection, assessment intelligence, structured export, and HTML report generation.
-
-The main command intentionally keeps its normal syntax short. Run `Get-Help Invoke-EntraSecurityAssessment -Examples` for copy/paste examples. Infrequently used transport, checkpoint, session, logging, report-path, and consultant metadata controls are available through the single `-AdvancedOptions` hashtable.
-
-By default, the main HTML report and its evidence/diagnostics sidecars are written inside the same timestamped structured export directory. In the returned assessment summary, `GraphCallsIssued`, `IntelligenceAdded`, and `NewObservationsAdded` describe the full assessment; the corresponding `Report*` properties describe report generation only.
-
-### Focused workflows
-
-Use the workflow in this order when you need repeatable evidence: connect, collect
-or save a snapshot, inspect offline, compare snapshots, apply baselines or rule
-packs, then export and report.
-
-Save a portable snapshot during a live assessment, then re-analyze it later without Graph collection:
+### Offline assessment from a snapshot
 
 ```powershell
 Invoke-EntraSecurityAssessment `
-    -AssessmentName "Current" `
-    -SaveSnapshotPath ".\snapshots\current.json"
-
-Invoke-EntraSecurityAssessment `
-    -AssessmentName "Offline reanalysis" `
-    -SnapshotPath ".\snapshots\current.json"
+    -AssessmentName "Offline Assessment" `
+    -SnapshotPath ".\snapshots\tenant.json"
 ```
 
-Limit live collection to explicit targets (CSV/TXT is also supported through `-TargetFile`):
+Portable offline mode performs **zero Microsoft Graph requests**.
+
+### Compare two snapshots
 
 ```powershell
 Invoke-EntraSecurityAssessment `
-    -AssessmentName "Targeted application review" `
+    -AssessmentName "Drift Review" `
+    -SnapshotPath ".\snapshots\current.json" `
+    -CompareToSnapshotPath ".\snapshots\previous.json"
+```
+
+### Target specific objects
+
+```powershell
+Invoke-EntraSecurityAssessment `
+    -AssessmentName "Targeted Review" `
     -Target "Application|<object-id>","ServicePrincipal|<object-id>"
 ```
 
-Compare deterministic snapshots, or apply a declarative rule pack and accepted-condition baseline offline:
+For additional workflows, including rule packs, baselines, advanced options, and manual pipeline commands:
 
 ```powershell
-Invoke-EntraSecurityAssessment `
-    -AssessmentName "Drift review" `
-    -SnapshotPath ".\snapshots\current.json" `
-    -CompareToSnapshotPath ".\snapshots\previous.json"
-
-Invoke-EntraSecurityAssessment `
-    -AssessmentName "Policy review" `
-    -SnapshotPath ".\snapshots\current.json" `
-    -RulePackPath ".\policy\rules.json" `
-    -BaselinePath ".\policy\baseline.json"
-```
-
-For uncommon operational tuning, use one advanced hashtable rather than expanding the normal command syntax:
-
-```powershell
-Invoke-EntraSecurityAssessment `
-    -AssessmentName "Consulting Assessment" `
-    -AdvancedOptions @{
-        ClientName = "Contoso"
-        ConsultantName = "Security Team"
-        BatchSize = 50
-    }
-```
-
-Supported advanced keys are documented by `Get-Help Invoke-EntraSecurityAssessment -Full`.
-
-Interactive completion output and report telemetry distinguish tenant-wide, targeted, and portable-offline execution. Runtime telemetry includes stage timings, offline objects/second, logical versus physical Graph requests, batching efficiency, the OS process high-water mark, a run-observed sampled working-set peak, and an exact run peak when the process high-water mark advances during that assessment. `GraphCallsAfterSnapshot` remains the post-snapshot boundary check.
-
-`Complete` evidence means the required collector succeeded for the stated scope.
-`Partial` or failed evidence is retained in exports and reports and should be
-treated as a boundary on what the assessment can safely infer. Ownerless,
-missing-counterpart, and similar negative observations are emitted only when
-the relevant collection completed successfully.
-
-Privileged identity context is collected during snapshot creation and processed
-offline. It uses Microsoft Graph v1.0 role definitions, unified role assignments,
-active and eligible PIM schedule instances, Administrative Units, AU membership,
-and risky users. Unified role assignments remain the canonical source for
-AU-scoped role assignments through `directoryScopeId =
-/administrativeUnits/{id}`; `scopedRoleMembers` is not requested for new
-snapshots.
-
-Active PIM schedule instances are reconciled with unified role assignments so
-the same effective privilege is not counted twice. `Assigned` means active
-assigned privilege; `Activated` means an eligible assignment is currently active.
-Privileged risky-user findings require active privileged context plus
-`riskState` of `atRisk` or `confirmedCompromised`. Resolved, safe, none, and
-unknown future states remain contextual. Risk detections are intentionally not
-collected in this release pass because risky-user state is sufficient for the
-current privilege/risk correlation and detection records are retention-bound and
-more volatile.
-
-### Deferred object-depth candidates
-
-Identity Protection risk detections are a plausible future evidence enrichment
-candidate when operators need event-level explainability for risky-user state.
-They are deferred here to avoid noisy drift and additional permission scope
-until the event-level data is required by a specific observation.
-
-## Public Commands
-
-The module exposes seven public commands:
-
-```text
-Connect-InspectorGraph
-Get-EntraObjectInsight
-Invoke-EntraTenantInspection
-Export-EntraTenantInspection
-Invoke-EntraAssessmentIntelligence
-Export-EntraAssessmentReport
-Invoke-EntraSecurityAssessment
-```
-
-For object-specific inspection:
-
-```powershell
-Connect-InspectorGraph
-Get-EntraObjectInsight -Identity "<object-id-or-upn-or-app-id>"
-```
-
-For manual pipeline execution:
-
-```powershell
-$tenantResult = Invoke-EntraTenantInspection `
-    -ObjectType Application, ServicePrincipal, User, Group `
-    -MaxObjectsPerType 0 `
-    -BatchSize 25
-
-$intelligence = Invoke-EntraAssessmentIntelligence `
-    -InputObject $tenantResult `
-    -AssessmentName "Example Assessment"
-
-$export = Export-EntraTenantInspection `
-    -InputObject $tenantResult `
-    -AssessmentIntelligence $intelligence `
-    -OutputDirectory ".\EntraObjectInspector-Exports" `
-    -AssessmentName "Example Assessment"
-
-Export-EntraAssessmentReport `
-    -InputObject $tenantResult `
-    -AssessmentIntelligence $intelligence `
-    -AssessmentName "Example Assessment" `
-    -OutputPath ".\EntraObjectInspector-Reports\example-assessment.html" `
-    -Force
+Get-Help Invoke-EntraSecurityAssessment -Examples
+Get-Help Invoke-EntraSecurityAssessment -Full
 ```
 
 ## Output
 
-A tenant assessment produces structured JSON/CSV artifacts, a Markdown summary, diagnostics, and three self-contained HTML reports:
+Each assessment produces a timestamped package containing structured artifacts and three self-contained HTML reports:
 
 - main assessment report
 - evidence report
 - diagnostics report
 
-The export package includes the assessment manifest, summary, observations, object/evidence indexes, findings, recommendations, correlations, limitations, failed-object records, execution data, and assessment intelligence.
+The package also includes the manifest, observations, grouped findings, object/evidence indexes, correlations, limitations, recommendations, execution metadata, and assessment intelligence.
 
-Generated outputs may contain sensitive tenant metadata. Store and share them accordingly.
+Generated output may contain sensitive tenant information and should be stored and shared accordingly.
 
-### Report search via URL parameters
+## Security model
 
-The main assessment report supports prefilling the finding search box through URL query parameters. `q` provides a free-text search query and `object` provides an object-oriented prefill; when both are present, `q` takes precedence. Search values are applied inline when the report loads and are never persisted — no local or session storage is used, so reloading the report without the parameters restores the unfiltered view.
+Entra Object Inspector remains read-only. Tenant operations use Microsoft Graph `GET` requests. High-volume collection can use Microsoft Graph JSON batching, where the outer `$batch` request is `POST` but contained tenant operations remain read-only `GET` requests.
 
-Examples (URL-encode special characters such as spaces and `@`):
+After snapshot collection, assessment intelligence, correlation, exports, and report generation operate offline. `GraphCallsAfterSnapshot` is used as a release boundary check.
 
-```text
-report.html?q=Directory.ReadWrite.All
-report.html?q=Policy.ReadWrite.ConditionalAccess
-report.html?q=Finance%20Automation%20App
-report.html?object=00000000-0000-0000-0000-000000000000
-report.html?object=user%40contoso.com
-```
+## Validation
 
-Missing, empty, or unsupported parameters are ignored, so the reports degrade gracefully to the default unfiltered view in any host that does not supply them.
+The v1.0.3 release was validated with:
 
-## Security Model
+- **349/349 Pester tests passing**
+- successful tenant-wide live assessment
+- successful portable offline assessment
+- zero failed objects in the validated live and offline runs
+- `PackageValidationStatus = Success`
+- `ReleaseEligible = True`
+- `GraphCallsAfterSnapshot = 0`
+- zero Graph requests during portable offline analysis
 
-Entra Object Inspector is designed to remain read-only. Logical tenant operations use Microsoft Graph `GET` requests. Selected high-volume independent reads may use Microsoft Graph JSON batching; the outer `$batch` request uses `POST`, while its individual subrequests remain read-only `GET` operations.
-
-Post-snapshot assessment intelligence, exports, and report generation do not require Microsoft Graph calls.
-
-## Testing
-
-Run the full Pester suite:
+Run the test suite with:
 
 ```powershell
 Invoke-Pester -Path .\Tests -Output Detailed
 ```
 
-The current release baseline contains **349 tests** and requires **349 passed / 0 failed / 0 skipped**.
-
-For a broader local validation:
-
-```powershell
-.\Scripts\Test-EntraObjectInspectorRequirements.ps1 -RunTests
-```
-
-## Repository Structure
+## Repository structure
 
 ```text
 Public/      Exported PowerShell commands
 Private/     Internal assessment implementation
-Scripts/     Local validation/operator helpers
+Scripts/     Validation and operator helpers
+Schemas/     Rule-pack, baseline, and artifact schemas
 Tests/       Pester test suite
 ```
 
-## Contributing
+## Contributing and security
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development, testing, and release guidance.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development guidance and [SECURITY.md](SECURITY.md) for security reporting.
 
-Contributions should preserve the read-only Microsoft Graph boundary and evidence/provenance behavior.
+Contributions should preserve the read-only Microsoft Graph boundary, deterministic snapshot behavior, evidence provenance, and fail-closed coverage semantics.
 
 ## License
 
