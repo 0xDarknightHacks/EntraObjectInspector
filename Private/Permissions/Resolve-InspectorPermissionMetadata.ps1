@@ -49,7 +49,7 @@ function Resolve-InspectorPermissionMetadata {
 
     return [PSCustomObject][ordered]@{
         PSTypeName             = 'EntraObjectInspector.PermissionCatalogEntry'
-        CatalogVersion         = '0.5.0'
+        CatalogVersion         = '0.6.0'
         CatalogStatus          = 'Unknown'
         Confidence             = 'Low'
         ResourceAppId          = $ResourceAppId

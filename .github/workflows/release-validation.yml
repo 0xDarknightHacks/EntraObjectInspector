@@ -84,8 +84,8 @@ jobs:
           if ($result.SkippedCount -gt 0) {
               throw "Pester skipped tests: $($result.SkippedCount) skipped test(s)."
           }
-          if ($result.TotalCount -ne 332) {
-              throw "Unexpected Pester test count: expected 332, got $($result.TotalCount)."
+          if ($result.TotalCount -ne 349) {
+              throw "Unexpected Pester test count: expected 349, got $($result.TotalCount)."
           }
 
       - name: Verify source package excludes generated assessment output
@@ -96,6 +96,7 @@ jobs:
               'reports',
               'EntraObjectInspector-Exports',
               'EntraObjectInspector-Reports',
+              'EntraObjectInspector-Offline-Exports',
               'snapshots',
               'logs',
               'TestResults',

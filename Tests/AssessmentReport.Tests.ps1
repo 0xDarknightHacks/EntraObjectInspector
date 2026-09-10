@@ -270,6 +270,10 @@ Describe 'HTML assessment report generator' {
 
             $result.Status | Should -Be 'Success'
             $result.ReleaseEligible | Should -BeTrue
+            @($result.Errors).Count | Should -Be 0
+            @($result.Warnings).Count | Should -Be 0
+            ($result | ConvertTo-Json -Depth 10 -Compress) | Should -Match '"Errors":\[\]'
+            ($result | ConvertTo-Json -Depth 10 -Compress) | Should -Match '"Warnings":\[\]'
 
             $summary.ScopeInventory = [PSCustomObject]@{
                 FailedObjects = 0
@@ -364,8 +368,8 @@ Describe 'HTML assessment report generator' {
             $advisoryResult = Test-InspectorReportPackageConsistency -Summary $summary -SecurityObservations @((New-TestObservation)) -EvidenceRows $advisoryEvidenceRows -AssessmentFindings @() -FailedObjects @() -Manifest $manifest
             $advisoryResult.Status | Should -Be 'Success'
             $advisoryResult.ReleaseEligible | Should -BeTrue
-            @($advisoryResult.Errors).ErrorId | Should -Not -Contain 'PKG-EVIDENCE-COVERAGE-001'
-            @($advisoryResult.Errors).ErrorId | Should -Not -Contain 'PKG-EVIDENCE-PLAN-001'
+            @($advisoryResult.Errors | ForEach-Object { $_.ErrorId }) | Should -Not -Contain 'PKG-EVIDENCE-COVERAGE-001'
+            @($advisoryResult.Errors | ForEach-Object { $_.ErrorId }) | Should -Not -Contain 'PKG-EVIDENCE-PLAN-001'
 
             # Malformed advisory metadata cannot be trusted to shrink the
             # denominator; package validation must fail closed instead.
@@ -494,16 +498,16 @@ Describe 'HTML assessment report generator' {
 
             $html | Should -Match '<!doctype html>'
             $html | Should -Match '<style>'
-            $html | Should -Match 'Client / Tenant Details'
-            $html | Should -Match 'Executive Summary'
-            $html | Should -Match 'Summary Metrics'
-            $html | Should -Match 'Grouped Findings'
-            $html | Should -Match 'Assessment Signals by Category'
+            $html | Should -Match 'Tenant details'
+            $html | Should -Match 'Assessment summary'
+            $html | Should -Match 'At a glance'
+            $html | Should -Match '<h2>Findings</h2>'
+            $html | Should -Match 'Technical appendix'
             $html | Should -Not -Match 'Runtime Telemetry'
             $html | Should -Not -Match 'Top Actions / Recommended Next Actions'
             $html | Should -Not -Match 'Boundaries &amp; Trust'
             $html | Should -Not -Match 'Evidence References'
-            $html | Should -Not -Match 'Assessment Limitations'
+            $html | Should -Match 'Assessment notes and limitations'
         }
 
         It 'shows a fail-closed package validation banner in the main report' {
@@ -514,8 +518,8 @@ Describe 'HTML assessment report generator' {
 
             $html = New-InspectorHtmlReport -ReportModel $model
 
-            $html | Should -Match 'ASSESSMENT PACKAGE VALIDATION FAILED'
-            $html | Should -Match 'Package validation: Failed'
+            $html | Should -Match 'Assessment package validation failed'
+            $html | Should -Match '<span class="pill severity-high">Failed</span>'
             $html | Should -Match 'client-entra-assessment-diagnostics.html'
         }
 

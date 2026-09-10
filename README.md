@@ -2,6 +2,8 @@
 
 Entra Object Inspector is a read-only PowerShell tool for assessing Microsoft Entra ID objects and relationships through Microsoft Graph. It inspects users, groups, applications, and service principals, preserves supporting evidence, generates assessment findings, and exports structured artifacts and self-contained HTML reports.
 
+Current module release: **1.1.0**.
+
 ## Scope
 
 The tool supports:
@@ -127,17 +129,20 @@ Invoke-EntraSecurityAssessment `
     -OutputDirectory ".\EntraObjectInspector-Exports"
 ```
 
-To specify the report path and open it after generation:
+To open the generated report after generation:
 
 ```powershell
 Invoke-EntraSecurityAssessment `
     -AssessmentName "Contoso Entra Assessment" `
     -OutputDirectory ".\EntraObjectInspector-Exports" `
-    -ReportPath ".\EntraObjectInspector-Reports\contoso-assessment.html" `
     -OpenReport
 ```
 
 The command performs authentication, snapshot collection, tenant inspection, assessment intelligence, structured export, and HTML report generation.
+
+The main command intentionally keeps its normal syntax short. Run `Get-Help Invoke-EntraSecurityAssessment -Examples` for copy/paste examples. Infrequently used transport, checkpoint, session, logging, report-path, and consultant metadata controls are available through the single `-AdvancedOptions` hashtable.
+
+By default, the main HTML report and its evidence/diagnostics sidecars are written inside the same timestamped structured export directory. In the returned assessment summary, `GraphCallsIssued`, `IntelligenceAdded`, and `NewObservationsAdded` describe the full assessment; the corresponding `Report*` properties describe report generation only.
 
 ### Focused workflows
 
@@ -162,7 +167,6 @@ Limit live collection to explicit targets (CSV/TXT is also supported through `-T
 ```powershell
 Invoke-EntraSecurityAssessment `
     -AssessmentName "Targeted application review" `
-    -ObjectType Application,ServicePrincipal `
     -Target "Application|<object-id>","ServicePrincipal|<object-id>"
 ```
 
@@ -180,6 +184,20 @@ Invoke-EntraSecurityAssessment `
     -RulePackPath ".\policy\rules.json" `
     -BaselinePath ".\policy\baseline.json"
 ```
+
+For uncommon operational tuning, use one advanced hashtable rather than expanding the normal command syntax:
+
+```powershell
+Invoke-EntraSecurityAssessment `
+    -AssessmentName "Consulting Assessment" `
+    -AdvancedOptions @{
+        ClientName = "Contoso"
+        ConsultantName = "Security Team"
+        BatchSize = 50
+    }
+```
+
+Supported advanced keys are documented by `Get-Help Invoke-EntraSecurityAssessment -Full`.
 
 Interactive completion output and report telemetry distinguish tenant-wide, targeted, and portable-offline execution. Runtime telemetry includes stage timings, offline objects/second, logical versus physical Graph requests, batching efficiency, the OS process high-water mark, a run-observed sampled working-set peak, and an exact run peak when the process high-water mark advances during that assessment. `GraphCallsAfterSnapshot` remains the post-snapshot boundary check.
 
@@ -213,20 +231,6 @@ Identity Protection risk detections are a plausible future evidence enrichment
 candidate when operators need event-level explainability for risky-user state.
 They are deferred here to avoid noisy drift and additional permission scope
 until the event-level data is required by a specific observation.
-
-## Preview
-
-### CLI assessment
-
-![Entra Object Inspector CLI assessment](docs/images/cli-assessment.png)
-
-### Assessment summary
-
-![Entra Object Inspector assessment summary](docs/images/report-summary.png)
-
-### Evidence-backed finding
-
-![Entra Object Inspector grouped finding](docs/images/grouped-finding.png)
 
 ## Public Commands
 
@@ -317,7 +321,7 @@ Run the full Pester suite:
 Invoke-Pester -Path .\Tests -Output Detailed
 ```
 
-The current release baseline contains **332 tests** and requires **332 passed / 0 failed / 0 skipped**.
+The current release baseline contains **349 tests** and requires **349 passed / 0 failed / 0 skipped**.
 
 For a broader local validation:
 

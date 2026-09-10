@@ -259,16 +259,6 @@ function Invoke-InspectorRules {
         }
     }
     else {
-        $highImpactPermissionNames = @(
-            'Directory.Read.All',
-            'Directory.ReadWrite.All',
-            'RoleManagement.ReadWrite.Directory',
-            'AppRoleAssignment.ReadWrite.All',
-            'Application.ReadWrite.All',
-            'User.ReadWrite.All',
-            'Group.ReadWrite.All'
-        )
-
         foreach ($relationship in $applicationPermissionRelationships) {
             if ($relationship.TargetDisplayName -ne 'Microsoft Graph') {
                 continue
@@ -279,10 +269,20 @@ function Invoke-InspectorRules {
                     -Metadata $relationship.Metadata `
                     -Name 'PermissionName')
 
-            if (
-                [string]::IsNullOrWhiteSpace($permissionName) -or
-                $permissionName -notin $highImpactPermissionNames
-            ) {
+            if ([string]::IsNullOrWhiteSpace($permissionName)) {
+                continue
+            }
+
+            $catalogEntry = @(
+                Get-InspectorPermissionCatalog -PermissionName $permissionName |
+                    Where-Object {
+                        $_.ResourceAppId -eq '00000003-0000-0000-c000-000000000000' -and
+                        $_.PermissionType -eq 'Application'
+                    } |
+                    Select-Object -First 1
+            )
+
+            if ($catalogEntry.Count -eq 0 -or $catalogEntry[0].IsHighImpact -ne $true) {
                 continue
             }
 

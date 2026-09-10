@@ -1,7 +1,7 @@
 @{
     RootModule = 'EntraObjectInspector.psm1'
 
-    ModuleVersion = '1.0.2'
+    ModuleVersion = '1.1.0'
 
     GUID = '3c8c54d6-218b-4a51-a3c7-41f908e6fd79'
 
@@ -42,6 +42,8 @@ evidence-backed object inspection through Microsoft Graph.
 
     PrivateData = @{
         PSData = @{
+            ProjectUri = 'https://github.com/0xDarknightHacks/EntraObjectInspector'
+            LicenseUri = 'https://github.com/0xDarknightHacks/EntraObjectInspector/blob/main/LICENSE'
             Tags = @(
                 'MicrosoftGraph',
                 'EntraID',

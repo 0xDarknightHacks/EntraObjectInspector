@@ -40,7 +40,7 @@ function New-InspectorPermissionCatalogEntry {
 
     return [PSCustomObject][ordered]@{
         PSTypeName             = 'EntraObjectInspector.PermissionCatalogEntry'
-        CatalogVersion         = '0.5.0'
+        CatalogVersion         = '0.6.0'
         ResourceAppId          = $ResourceAppId
         ResourceDisplayName    = $ResourceDisplayName
         PermissionId           = $PermissionId
@@ -56,7 +56,7 @@ function New-InspectorPermissionCatalogEntry {
         TypicalAbuse           = $TypicalAbuse
         Reference              = $Reference
         SourceUrl              = 'https://learn.microsoft.com/graph/permissions-reference'
-        SourceLastValidatedUtc = '2026-08-30'
+        SourceLastValidatedUtc = '2026-09-10'
     }
 }
 
@@ -133,10 +133,43 @@ function Get-InspectorPermissionCatalog {
             -PermissionType 'Application' `
             -DisplayText 'Read directory data' `
             -Description 'Allows the app to read data in the organization directory, such as users, groups, and apps, without a signed-in user.' `
-            -ImpactLevel 'High' `
+            -ImpactLevel 'Medium' `
             -CapabilityCategory 'Directory inventory' `
             -AdministrativeImpact 'Can broadly enumerate Microsoft Entra directory resources.' `
             -TypicalAbuse 'Tenant-wide reconnaissance of users, groups, apps, and directory relationships.'
+
+        New-InspectorPermissionCatalogEntry `
+            -PermissionId '5eb59dd3-1da2-4329-8733-9dabdc435916' `
+            -PermissionName 'AdministrativeUnit.ReadWrite.All' `
+            -PermissionType 'Application' `
+            -DisplayText 'Read and write all administrative units' `
+            -Description 'Allows the app to create, read, update, and delete administrative units and manage administrative unit membership without a signed-in user.' `
+            -ImpactLevel 'High' `
+            -CapabilityCategory 'Administrative unit management' `
+            -AdministrativeImpact 'Can change administrative-unit configuration and membership across the tenant.' `
+            -TypicalAbuse 'Changing administrative scope or membership to alter delegated-management boundaries.'
+
+        New-InspectorPermissionCatalogEntry `
+            -PermissionId '8e8e4742-1d95-4f68-9d56-6ee75648c72a' `
+            -PermissionName 'DelegatedPermissionGrant.ReadWrite.All' `
+            -PermissionType 'Application' `
+            -DisplayText 'Manage all delegated permission grants' `
+            -Description 'Allows the app to manage permission grants for delegated permissions exposed by any API, including Microsoft Graph, without a signed-in user.' `
+            -ImpactLevel 'High' `
+            -CapabilityCategory 'Authorization grant management' `
+            -AdministrativeImpact 'Can create or change delegated permission grants for applications across APIs, including Microsoft Graph.' `
+            -TypicalAbuse 'Granting additional delegated access that expands what an application can do on behalf of users.'
+
+        New-InspectorPermissionCatalogEntry `
+            -PermissionId '7e05723c-0bb0-42da-be95-ae9f08a6e53c' `
+            -PermissionName 'Domain.ReadWrite.All' `
+            -PermissionType 'Application' `
+            -DisplayText 'Read and write domains' `
+            -Description 'Allows the app to read and write all domain properties, and add, verify, or remove domains, without a signed-in user.' `
+            -ImpactLevel 'High' `
+            -CapabilityCategory 'Domain management' `
+            -AdministrativeImpact 'Can change tenant domain configuration, including adding, verifying, and removing domains.' `
+            -TypicalAbuse 'Changing trusted tenant domain configuration or disrupting identity routing.'
 
         New-InspectorPermissionCatalogEntry `
             -PermissionId '19dbc75e-c2e2-444c-a770-ec69d8559fc7' `
@@ -148,6 +181,182 @@ function Get-InspectorPermissionCatalog {
             -CapabilityCategory 'Directory management' `
             -AdministrativeImpact 'Can broadly modify directory objects such as users and groups.' `
             -TypicalAbuse 'Privilege escalation or persistence by changing directory objects and memberships.'
+
+        New-InspectorPermissionCatalogEntry `
+            -PermissionId '62a82d76-70ea-41e2-9197-370581804d09' `
+            -PermissionName 'Group.ReadWrite.All' `
+            -PermissionType 'Application' `
+            -DisplayText 'Read and write all groups' `
+            -Description 'Allows the app to create groups, read and update group properties and memberships, and delete groups without a signed-in user.' `
+            -ImpactLevel 'High' `
+            -CapabilityCategory 'Group management' `
+            -AdministrativeImpact 'Can broadly create, modify, and delete groups and change membership, subject to extra protections for role-assignable groups.' `
+            -TypicalAbuse 'Changing group membership or group configuration to expand access to resources.'
+
+        New-InspectorPermissionCatalogEntry `
+            -PermissionId 'dbaae8cf-10b5-4b86-a4a1-f871c94c6695' `
+            -PermissionName 'GroupMember.ReadWrite.All' `
+            -PermissionType 'Application' `
+            -DisplayText 'Read and write all group memberships' `
+            -Description 'Allows the app to read and update membership of groups it can access without a signed-in user; group properties and owners cannot be updated.' `
+            -ImpactLevel 'High' `
+            -CapabilityCategory 'Group membership management' `
+            -AdministrativeImpact 'Can change memberships across accessible groups, although role-assignable group membership requires stronger role-management permission.' `
+            -TypicalAbuse 'Adding identities to access-bearing groups to expand effective access.'
+
+        New-InspectorPermissionCatalogEntry `
+            -PermissionId '656f6061-f9fe-4807-9708-6a2e0934df76' `
+            -PermissionName 'IdentityRiskyUser.ReadWrite.All' `
+            -PermissionType 'Application' `
+            -DisplayText 'Read and write all risky user information' `
+            -Description 'Allows the app to read and update risky-user information for the organization without a signed-in user, including dismissing risky users.' `
+            -ImpactLevel 'High' `
+            -CapabilityCategory 'Identity risk management' `
+            -AdministrativeImpact 'Can change risky-user state used by identity-risk investigation and policy workflows.' `
+            -TypicalAbuse 'Suppressing or changing risky-user state to reduce visibility or influence downstream risk handling.'
+
+        New-InspectorPermissionCatalogEntry `
+            -PermissionId '854d9ab1-6657-4ec8-be45-823027bcd009' `
+            -PermissionName 'PrivilegedAccess.ReadWrite.AzureAD' `
+            -PermissionType 'Application' `
+            -DisplayText 'Read and write privileged access to Azure AD roles' `
+            -Description 'Allows the app to request and manage time-based assignment and just-in-time elevation of Microsoft Entra built-in and custom administrative roles without a signed-in user.' `
+            -ImpactLevel 'High' `
+            -CapabilityCategory 'Privileged role management' `
+            -AdministrativeImpact 'Can manage time-based and just-in-time Microsoft Entra role access.' `
+            -TypicalAbuse 'Creating or changing privileged role access for users or other principals.'
+
+        New-InspectorPermissionCatalogEntry `
+            -PermissionId '2f6817f8-7b12-4f0f-bc18-eeaf60705a9e' `
+            -PermissionName 'PrivilegedAccess.ReadWrite.AzureADGroup' `
+            -PermissionType 'Application' `
+            -DisplayText 'Read and write privileged access to Azure AD groups' `
+            -Description 'Allows the app to manage privileged access for Microsoft Entra groups without a signed-in user.' `
+            -ImpactLevel 'High' `
+            -CapabilityCategory 'Privileged group management' `
+            -AdministrativeImpact 'Can manage privileged group access and influence group-based privilege.' `
+            -TypicalAbuse 'Changing privileged group membership or ownership access.'
+
+        New-InspectorPermissionCatalogEntry `
+            -PermissionId '41202f2c-f7ab-45be-b001-85c9728b9d69' `
+            -PermissionName 'PrivilegedAssignmentSchedule.ReadWrite.AzureADGroup' `
+            -PermissionType 'Application' `
+            -DisplayText 'Read, create, and delete assignment schedules for access to Azure AD groups' `
+            -Description 'Allows the app to read, create, and delete time-based assignment schedules for access to Microsoft Entra groups without a signed-in user.' `
+            -ImpactLevel 'High' `
+            -CapabilityCategory 'Privileged group management' `
+            -AdministrativeImpact 'Can create or remove active time-based privileged group membership or ownership schedules.' `
+            -TypicalAbuse 'Granting active privileged group access through PIM for Groups.'
+
+        New-InspectorPermissionCatalogEntry `
+            -PermissionId '618b6020-bca8-4de6-99f6-ef445fa4d857' `
+            -PermissionName 'PrivilegedEligibilitySchedule.ReadWrite.AzureADGroup' `
+            -PermissionType 'Application' `
+            -DisplayText 'Read, create, and delete eligibility schedules for access to Azure AD groups' `
+            -Description 'Allows the app to read, create, and delete time-based eligibility schedules for access to Microsoft Entra groups without a signed-in user.' `
+            -ImpactLevel 'High' `
+            -CapabilityCategory 'Privileged group management' `
+            -AdministrativeImpact 'Can create or remove eligibility for privileged group membership or ownership.' `
+            -TypicalAbuse 'Making identities eligible to obtain privileged group access.'
+
+        New-InspectorPermissionCatalogEntry `
+            -PermissionId 'b38dcc4d-a239-4ed6-aa84-6c65b284f97c' `
+            -PermissionName 'RoleManagementPolicy.ReadWrite.AzureADGroup' `
+            -PermissionType 'Application' `
+            -DisplayText 'Read, update, and delete all policies in PIM for Groups' `
+            -Description 'Allows the app to read, update, and delete policies in Privileged Identity Management for Groups without a signed-in user.' `
+            -ImpactLevel 'High' `
+            -CapabilityCategory 'Privileged group policy management' `
+            -AdministrativeImpact 'Can change PIM for Groups policy controls such as activation and assignment governance.' `
+            -TypicalAbuse 'Weakening controls around activation or assignment of privileged group access.'
+
+        New-InspectorPermissionCatalogEntry `
+            -PermissionId 'dd199f4a-f148-40a4-a2ec-f0069cc799ec' `
+            -PermissionName 'RoleAssignmentSchedule.ReadWrite.Directory' `
+            -PermissionType 'Application' `
+            -DisplayText "Read, update, and delete all active role assignments for your company's directory" `
+            -Description 'Allows the app to read and manage active Microsoft Entra RBAC assignments and schedules without a signed-in user.' `
+            -ImpactLevel 'High' `
+            -CapabilityCategory 'Privileged role management' `
+            -AdministrativeImpact 'Can manage active Microsoft Entra directory-role assignments and schedules.' `
+            -TypicalAbuse 'Creating or changing active privileged role assignments.'
+
+        New-InspectorPermissionCatalogEntry `
+            -PermissionId 'fee28b28-e1f3-4841-818e-2704dc62245f' `
+            -PermissionName 'RoleEligibilitySchedule.ReadWrite.Directory' `
+            -PermissionType 'Application' `
+            -DisplayText "Read, update, and delete all eligible role assignments and schedules for your company's directory" `
+            -Description 'Allows the app to read and manage eligible Microsoft Entra RBAC assignments and schedules without a signed-in user.' `
+            -ImpactLevel 'High' `
+            -CapabilityCategory 'Privileged role management' `
+            -AdministrativeImpact 'Can manage who is eligible to activate Microsoft Entra directory roles.' `
+            -TypicalAbuse 'Making identities eligible for privileged Microsoft Entra roles.'
+
+        New-InspectorPermissionCatalogEntry `
+            -PermissionId '31e08e0a-d3f7-4ca2-ac39-7343fb83e8ad' `
+            -PermissionName 'RoleManagementPolicy.ReadWrite.Directory' `
+            -PermissionType 'Application' `
+            -DisplayText "Read, update, and delete all policies for privileged role assignments of your company's directory" `
+            -Description 'Allows the app to read, update, and delete policies for privileged Microsoft Entra RBAC assignments without a signed-in user.' `
+            -ImpactLevel 'High' `
+            -CapabilityCategory 'Privileged role policy management' `
+            -AdministrativeImpact 'Can modify PIM role-management policy controls for Microsoft Entra roles.' `
+            -TypicalAbuse 'Weakening activation requirements, approval, duration, or other privileged-role policy controls.'
+
+        New-InspectorPermissionCatalogEntry `
+            -PermissionId '81adad77-a25a-489d-ac43-321115620139' `
+            -PermissionName 'PrivilegedAssignmentSchedule.ReadWrite.EntraAppRole' `
+            -PermissionType 'Application' `
+            -DisplayText 'Read, create, and delete assignment schedules for app permission grants and app role assignments' `
+            -Description 'Allows the app to read, create, and delete time-based assignment schedules for application permission grants to APIs and application assignments without a signed-in user.' `
+            -ImpactLevel 'High' `
+            -CapabilityCategory 'Authorization grant management' `
+            -AdministrativeImpact 'Can create or remove time-based active application permission grants and app-role assignments.' `
+            -TypicalAbuse 'Granting time-based application authorization to applications or other principals.'
+
+        New-InspectorPermissionCatalogEntry `
+            -PermissionId '7f4c39f1-1aa7-44b7-ab05-38df2609c37a' `
+            -PermissionName 'PrivilegedEligibilitySchedule.ReadWrite.EntraAppRole' `
+            -PermissionType 'Application' `
+            -DisplayText 'Read, create, and delete eligibility schedules for app permission grants and app role assignments' `
+            -Description 'Allows the app to read, create, and delete time-based eligibility schedules for application permission grants to APIs and application assignments without a signed-in user.' `
+            -ImpactLevel 'High' `
+            -CapabilityCategory 'Authorization grant management' `
+            -AdministrativeImpact 'Can create or remove eligibility for time-based application permission grants and app-role assignments.' `
+            -TypicalAbuse 'Making principals eligible for privileged application authorization.'
+
+        New-InspectorPermissionCatalogEntry `
+            -PermissionId '9acd699f-1e81-4958-b001-93b1d2506e19' `
+            -PermissionName 'EntitlementManagement.ReadWrite.All' `
+            -PermissionType 'Application' `
+            -DisplayText 'Read and write all entitlement management resources' `
+            -Description 'Allows the app to read and write access packages and related entitlement management resources without a signed-in user.' `
+            -ImpactLevel 'High' `
+            -CapabilityCategory 'Authorization grant management' `
+            -AdministrativeImpact 'Can manage authorizations for resources onboarded to entitlement management catalogs, including directory roles, app roles, API permissions, and group memberships.' `
+            -TypicalAbuse 'Granting or changing privileged access through entitlement-management resources.'
+
+        New-InspectorPermissionCatalogEntry `
+            -PermissionId 'a402ca1c-2696-4531-972d-6e5ee4aa11ea' `
+            -PermissionName 'Policy.ReadWrite.PermissionGrant' `
+            -PermissionType 'Application' `
+            -DisplayText 'Manage consent and permission grant policies' `
+            -Description 'Allows the app to manage policies related to consent and permission grants for applications, without a signed-in user.' `
+            -ImpactLevel 'High' `
+            -CapabilityCategory 'Authorization policy management' `
+            -AdministrativeImpact 'Can change tenant policies that govern consent and application permission grants.' `
+            -TypicalAbuse 'Weakening or changing consent controls around application authorization.'
+
+        New-InspectorPermissionCatalogEntry `
+            -PermissionId 'ec563bdb-80dc-47c0-81d3-bff47cc6ac06' `
+            -PermissionName 'RoleManagementPolicy.ReadWrite.EntraAppRole' `
+            -PermissionType 'Application' `
+            -DisplayText 'Manage all policies in PIM for App Roles' `
+            -Description 'Allows the app to manage policies in Privileged Identity Management for App Roles, without a signed-in user.' `
+            -ImpactLevel 'High' `
+            -CapabilityCategory 'Authorization grant policy management' `
+            -AdministrativeImpact 'Can change PIM policy controls for time-based application permission grants and app-role assignments.' `
+            -TypicalAbuse 'Weakening controls around privileged application authorization.'
 
         New-InspectorPermissionCatalogEntry `
             -PermissionId '483bed4a-2ad3-4361-a73b-c83ccdbdc53c' `
@@ -192,6 +401,39 @@ function Get-InspectorPermissionCatalog {
             -CapabilityCategory 'User management' `
             -AdministrativeImpact 'Can update user profile properties across the tenant, subject to Microsoft Graph constraints.' `
             -TypicalAbuse 'Changing user attributes that affect identity operations or downstream automation.'
+
+        New-InspectorPermissionCatalogEntry `
+            -PermissionId '50483e42-d915-4231-9639-7fdb7fd190e5' `
+            -PermissionName 'UserAuthenticationMethod.ReadWrite.All' `
+            -PermissionType 'Application' `
+            -DisplayText "Read and write all users' authentication methods" `
+            -Description 'Allows the app to read and write authentication methods of all users in the organization without a signed-in user.' `
+            -ImpactLevel 'High' `
+            -CapabilityCategory 'Authentication method management' `
+            -AdministrativeImpact 'Can change authentication methods for users across the tenant, subject to Microsoft Entra authorization constraints.' `
+            -TypicalAbuse 'Changing authentication-method state to weaken or redirect identity verification.'
+
+        New-InspectorPermissionCatalogEntry `
+            -PermissionId '29c18626-4985-4dcd-85c0-193eef327366' `
+            -PermissionName 'Policy.ReadWrite.AuthenticationMethod' `
+            -PermissionType 'Application' `
+            -DisplayText 'Read and write all authentication method policies' `
+            -Description 'Allows the app to read and write all authentication method policies for the tenant without a signed-in user.' `
+            -ImpactLevel 'High' `
+            -CapabilityCategory 'Authentication policy management' `
+            -AdministrativeImpact 'Can change tenant-wide authentication method policy.' `
+            -TypicalAbuse 'Weakening or changing authentication-method controls across the tenant.'
+
+        New-InspectorPermissionCatalogEntry `
+            -PermissionId 'fb221be6-99f2-473f-bd32-01c6a0e9ca3b' `
+            -PermissionName 'Policy.ReadWrite.Authorization' `
+            -PermissionType 'Application' `
+            -DisplayText "Read and write your organization's authorization policy" `
+            -Description 'Allows the app to read and write the organization authorization policy without a signed-in user.' `
+            -ImpactLevel 'High' `
+            -CapabilityCategory 'Authorization policy management' `
+            -AdministrativeImpact 'Can change tenant authorization-policy settings that influence default user permissions and other authorization behavior.' `
+            -TypicalAbuse 'Weakening tenant authorization policy to expand default capabilities.'
 
         New-InspectorPermissionCatalogEntry `
             -PermissionId '01c0a623-fc9b-48e9-b794-0756f8e8f067' `

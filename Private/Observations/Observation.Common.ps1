@@ -297,6 +297,12 @@ function New-InspectorObservationSemanticKey {
         [string](Get-InspectorObservationProperty -InputObject $Metadata -Name 'CredentialType')
         [string](Get-InspectorObservationProperty -InputObject $Metadata -Name 'KeyId')
         [string](Get-InspectorObservationProperty -InputObject $Metadata -Name 'RelationshipType')
+        [string](Get-InspectorObservationProperty -InputObject $Metadata -Name 'RelatedPrincipalId')
+        [string](Get-InspectorObservationProperty -InputObject $Metadata -Name 'RelatedGroupId')
+        [string](Get-InspectorObservationProperty -InputObject $Metadata -Name 'RelatedServicePrincipalId')
+        [string](Get-InspectorObservationProperty -InputObject $Metadata -Name 'OwnershipObjectId')
+        [string](Get-InspectorObservationProperty -InputObject $Metadata -Name 'RoleDefinitionId')
+        [string](Get-InspectorObservationProperty -InputObject $Metadata -Name 'AdministrativeUnitId')
     )
 
     return New-InspectorObservationId -Seed (@($semanticParts) -join '|')
@@ -763,4 +769,492 @@ function Get-InspectorObservationRelationships {
     }
 
     return @($relationships)
+}
+
+function Get-InspectorObservationRelationshipEvidenceIds {
+    [CmdletBinding()]
+    param (
+        [object[]]$Items = @()
+    )
+
+    $evidenceIds = @(
+        foreach ($item in @($Items)) {
+            if ($null -eq $item) { continue }
+
+            $directEvidenceId = [string](Get-InspectorObservationProperty -InputObject $item -Name 'EvidenceId')
+            if (-not [string]::IsNullOrWhiteSpace($directEvidenceId)) {
+                $directEvidenceId
+            }
+
+            foreach ($metadataEvidenceId in @(
+                Get-InspectorObservationMetadataValue -InputObject $item -Name 'EvidenceIds'
+            )) {
+                if (-not [string]::IsNullOrWhiteSpace([string]$metadataEvidenceId)) {
+                    [string]$metadataEvidenceId
+                }
+            }
+        }
+    )
+
+    return @($evidenceIds | Select-Object -Unique)
+}
+
+function Get-InspectorCrossObjectSecurityObservations {
+    <#
+    .SYNOPSIS
+        Derives evidence-backed security observations that require tenant-wide
+        correlation across already-collected ObjectInsight records.
+
+    .DESCRIPTION
+        Correlates application/service-principal privilege, ownership, group
+        membership, PIM role state, administrative-unit scope, and risky-user
+        context without making any Microsoft Graph calls.
+
+        These observations deliberately describe collected authorization and
+        governance combinations. They do not claim exploitability, compromise,
+        or executable attack paths.
+    #>
+
+    [CmdletBinding()]
+    param (
+        [object[]]$ObjectInsights = @()
+    )
+
+    $observations = [System.Collections.Generic.List[object]]::new()
+    if (@($ObjectInsights).Count -eq 0) {
+        return @()
+    }
+
+    $sourceObjectsById = @{}
+    $relationships = [System.Collections.Generic.List[object]]::new()
+    $relationshipSeen = @{}
+    $permissionInsights = [System.Collections.Generic.List[object]]::new()
+    $permissionSeen = @{}
+    $riskArtifacts = [System.Collections.Generic.List[object]]::new()
+    $riskSeen = @{}
+    $applicationIdentities = [System.Collections.Generic.List[object]]::new()
+    $applicationIdentitySeen = @{}
+
+    foreach ($objectInsight in @($ObjectInsights)) {
+        if ($null -eq $objectInsight) { continue }
+
+        foreach ($sourceObject in @(Get-InspectorObservationProperty -InputObject $objectInsight -Name 'SourceObjects')) {
+            if ($null -eq $sourceObject) { continue }
+            $objectId = [string](Get-InspectorObservationProperty -InputObject $sourceObject -Name 'ObjectId')
+            if ([string]::IsNullOrWhiteSpace($objectId)) { continue }
+            if (-not $sourceObjectsById.ContainsKey($objectId)) {
+                $sourceObjectsById[$objectId] = $sourceObject
+            }
+        }
+
+        foreach ($relationship in @(Get-InspectorObservationProperty -InputObject $objectInsight -Name 'Relationships')) {
+            if ($null -eq $relationship) { continue }
+            $relationshipType = [string](Get-InspectorObservationProperty -InputObject $relationship -Name 'RelationshipType')
+            $sourceObjectId = [string](Get-InspectorObservationProperty -InputObject $relationship -Name 'SourceObjectId')
+            $targetObjectId = [string](Get-InspectorObservationProperty -InputObject $relationship -Name 'TargetObjectId')
+            $evidenceId = [string](Get-InspectorObservationProperty -InputObject $relationship -Name 'EvidenceId')
+            $assignmentId = [string](Get-InspectorObservationMetadataValue -InputObject $relationship -Name 'AssignmentId')
+            $scheduleInstanceId = [string](Get-InspectorObservationMetadataValue -InputObject $relationship -Name 'ScheduleInstanceId')
+            $relationshipKey = "$relationshipType|$sourceObjectId|$targetObjectId|$assignmentId|$scheduleInstanceId|$evidenceId"
+            if (-not $relationshipSeen.ContainsKey($relationshipKey)) {
+                $relationshipSeen[$relationshipKey] = $true
+                $relationships.Add($relationship)
+            }
+        }
+
+        foreach ($permissionInsight in @(Get-InspectorObservationProperty -InputObject $objectInsight -Name 'PermissionInsights')) {
+            if ($null -eq $permissionInsight) { continue }
+            $sourceObjectId = [string](Get-InspectorObservationProperty -InputObject $permissionInsight -Name 'SourceObjectId')
+            $appRoleId = [string](Get-InspectorObservationProperty -InputObject $permissionInsight -Name 'AppRoleId')
+            $resourceAppId = [string](Get-InspectorObservationProperty -InputObject $permissionInsight -Name 'ResourceAppId')
+            $relationshipEvidenceId = [string](Get-InspectorObservationProperty -InputObject $permissionInsight -Name 'RelationshipEvidenceId')
+            $permissionKey = "$sourceObjectId|$resourceAppId|$appRoleId|$relationshipEvidenceId"
+            if (-not $permissionSeen.ContainsKey($permissionKey)) {
+                $permissionSeen[$permissionKey] = $true
+                $permissionInsights.Add($permissionInsight)
+            }
+        }
+
+        foreach ($artifact in @(Get-InspectorObservationProperty -InputObject $objectInsight -Name 'Artifacts')) {
+            if ($null -eq $artifact) { continue }
+            if ([string](Get-InspectorObservationProperty -InputObject $artifact -Name 'ArtifactType') -ne 'RiskyUserContext') { continue }
+            $sourceObjectId = [string](Get-InspectorObservationProperty -InputObject $artifact -Name 'SourceObjectId')
+            $evidenceId = [string](Get-InspectorObservationProperty -InputObject $artifact -Name 'EvidenceId')
+            $riskKey = "$sourceObjectId|$evidenceId"
+            if (-not $riskSeen.ContainsKey($riskKey)) {
+                $riskSeen[$riskKey] = $true
+                $riskArtifacts.Add($artifact)
+            }
+        }
+
+        $applicationIdentity = Get-InspectorObservationProperty -InputObject $objectInsight -Name 'ApplicationIdentity'
+        if ($null -ne $applicationIdentity) {
+            $applicationObjectId = [string](Get-InspectorObservationProperty -InputObject $applicationIdentity -Name 'ApplicationObjectId')
+            $servicePrincipalObjectId = [string](Get-InspectorObservationProperty -InputObject $applicationIdentity -Name 'ServicePrincipalObjectId')
+            $identityKey = "$applicationObjectId|$servicePrincipalObjectId"
+            if (-not [string]::IsNullOrWhiteSpace($identityKey.Replace('|','')) -and -not $applicationIdentitySeen.ContainsKey($identityKey)) {
+                $applicationIdentitySeen[$identityKey] = $true
+                $applicationIdentities.Add($applicationIdentity)
+            }
+        }
+    }
+
+    $highImpactPermissionsByPrincipal = @{}
+    foreach ($permissionInsight in @($permissionInsights)) {
+        $sourceObjectId = [string](Get-InspectorObservationProperty -InputObject $permissionInsight -Name 'SourceObjectId')
+        $resourceDisplayName = [string](Get-InspectorObservationProperty -InputObject $permissionInsight -Name 'ResourceDisplayName')
+        $resourceAppId = [string](Get-InspectorObservationProperty -InputObject $permissionInsight -Name 'ResourceAppId')
+        $isMicrosoftGraph = $resourceDisplayName -eq 'Microsoft Graph' -or $resourceAppId -eq '00000003-0000-0000-c000-000000000000'
+        $isHighImpact = (Get-InspectorObservationProperty -InputObject $permissionInsight -Name 'IsHighImpact') -eq $true
+        if ([string]::IsNullOrWhiteSpace($sourceObjectId) -or -not $isMicrosoftGraph -or -not $isHighImpact) { continue }
+        if (-not $highImpactPermissionsByPrincipal.ContainsKey($sourceObjectId)) {
+            $highImpactPermissionsByPrincipal[$sourceObjectId] = [System.Collections.Generic.List[object]]::new()
+        }
+        $highImpactPermissionsByPrincipal[$sourceObjectId].Add($permissionInsight)
+    }
+
+    $activeRolesByPrincipal = @{}
+    $eligibleRolesByPrincipal = @{}
+    foreach ($relationship in @($relationships)) {
+        $relationshipType = [string](Get-InspectorObservationProperty -InputObject $relationship -Name 'RelationshipType')
+        $sourceObjectId = [string](Get-InspectorObservationProperty -InputObject $relationship -Name 'SourceObjectId')
+        if ([string]::IsNullOrWhiteSpace($sourceObjectId)) { continue }
+
+        if ($relationshipType -in @('AssignedDirectoryRole', 'ActiveDirectoryRoleScheduleInstance')) {
+            if (-not $activeRolesByPrincipal.ContainsKey($sourceObjectId)) {
+                $activeRolesByPrincipal[$sourceObjectId] = [System.Collections.Generic.List[object]]::new()
+            }
+            $activeRolesByPrincipal[$sourceObjectId].Add($relationship)
+        }
+        elseif ($relationshipType -eq 'EligibleDirectoryRoleScheduleInstance') {
+            if (-not $eligibleRolesByPrincipal.ContainsKey($sourceObjectId)) {
+                $eligibleRolesByPrincipal[$sourceObjectId] = [System.Collections.Generic.List[object]]::new()
+            }
+            $eligibleRolesByPrincipal[$sourceObjectId].Add($relationship)
+        }
+    }
+
+    $riskByUserId = @{}
+    foreach ($riskArtifact in @($riskArtifacts)) {
+        $userId = [string](Get-InspectorObservationProperty -InputObject $riskArtifact -Name 'SourceObjectId')
+        if ([string]::IsNullOrWhiteSpace($userId)) { continue }
+        $riskState = [string](Get-InspectorObservationProperty -InputObject $riskArtifact -Name 'RiskState')
+        $isCurrentRisk = $riskState -in @('atRisk', 'confirmedCompromised')
+        if (-not $riskByUserId.ContainsKey($userId) -or $isCurrentRisk) {
+            $riskByUserId[$userId] = $riskArtifact
+        }
+    }
+
+    $appToServicePrincipal = @{}
+    foreach ($applicationIdentity in @($applicationIdentities)) {
+        $applicationObjectId = [string](Get-InspectorObservationProperty -InputObject $applicationIdentity -Name 'ApplicationObjectId')
+        $servicePrincipalObjectId = [string](Get-InspectorObservationProperty -InputObject $applicationIdentity -Name 'ServicePrincipalObjectId')
+        if (-not [string]::IsNullOrWhiteSpace($applicationObjectId) -and -not [string]::IsNullOrWhiteSpace($servicePrincipalObjectId)) {
+            $appToServicePrincipal[$applicationObjectId] = $servicePrincipalObjectId
+        }
+    }
+    foreach ($relationship in @($relationships)) {
+        $relationshipType = [string](Get-InspectorObservationProperty -InputObject $relationship -Name 'RelationshipType')
+        if ($relationshipType -eq 'ApplicationToServicePrincipal') {
+            $applicationObjectId = [string](Get-InspectorObservationProperty -InputObject $relationship -Name 'SourceObjectId')
+            $servicePrincipalObjectId = [string](Get-InspectorObservationProperty -InputObject $relationship -Name 'TargetObjectId')
+            if (-not [string]::IsNullOrWhiteSpace($applicationObjectId) -and -not [string]::IsNullOrWhiteSpace($servicePrincipalObjectId)) {
+                $appToServicePrincipal[$applicationObjectId] = $servicePrincipalObjectId
+            }
+        }
+        elseif ($relationshipType -eq 'ServicePrincipalToApplication') {
+            $servicePrincipalObjectId = [string](Get-InspectorObservationProperty -InputObject $relationship -Name 'SourceObjectId')
+            $applicationObjectId = [string](Get-InspectorObservationProperty -InputObject $relationship -Name 'TargetObjectId')
+            if (-not [string]::IsNullOrWhiteSpace($applicationObjectId) -and -not [string]::IsNullOrWhiteSpace($servicePrincipalObjectId)) {
+                $appToServicePrincipal[$applicationObjectId] = $servicePrincipalObjectId
+            }
+        }
+    }
+
+    $ownershipAssociations = @{}
+    foreach ($relationship in @($relationships | Where-Object { [string](Get-InspectorObservationProperty -InputObject $_ -Name 'RelationshipType') -eq 'OwnedBy' })) {
+        $sourceType = [string](Get-InspectorObservationProperty -InputObject $relationship -Name 'SourceObjectType')
+        $sourceId = [string](Get-InspectorObservationProperty -InputObject $relationship -Name 'SourceObjectId')
+        $targetType = [string](Get-InspectorObservationProperty -InputObject $relationship -Name 'TargetObjectType')
+        $ownerId = [string](Get-InspectorObservationProperty -InputObject $relationship -Name 'TargetObjectId')
+        if ($sourceType -notin @('Application', 'ServicePrincipal', 'Group') -or $targetType -ine 'User' -or [string]::IsNullOrWhiteSpace($ownerId)) { continue }
+        $key = "$sourceType|$sourceId|$ownerId"
+        if (-not $ownershipAssociations.ContainsKey($key)) {
+            $ownershipAssociations[$key] = [PSCustomObject][ordered]@{
+                SourceObjectType = $sourceType
+                SourceObjectId = $sourceId
+                OwnerId = $ownerId
+                Relationships = [System.Collections.Generic.List[object]]::new()
+            }
+        }
+        $ownershipAssociations[$key].Relationships.Add($relationship)
+    }
+
+    $applicationOwnerReference = 'Microsoft Entra enterprise application ownership guidance documents that an application can have more permissions than its owner and that this can create an elevation-of-privilege security concern.'
+    $roleAssignableGroupReference = 'Microsoft Entra role-assignable group guidance documents indirect role inheritance through membership, delegated owner management, PIM eligibility, and the prohibition on group nesting.'
+    $pimReference = 'Microsoft Entra Privileged Identity Management distinguishes active assignments, which are usable immediately, from eligible assignments, which require activation and can be subject to MFA, approval, justification, and time limits.'
+    $identityProtectionReference = 'Microsoft Entra ID Protection risky-user data is intended for investigation and remediation of identity risk.'
+
+    # Privileged application ownership: connect application-registration or
+    # enterprise-application ownership to the correlated service principal that
+    # actually holds Graph application permissions and/or Entra directory roles.
+    foreach ($association in @($ownershipAssociations.Values | Where-Object { $_.SourceObjectType -in @('Application', 'ServicePrincipal') })) {
+        $servicePrincipalId = ''
+        if ($association.SourceObjectType -eq 'ServicePrincipal') {
+            $servicePrincipalId = [string]$association.SourceObjectId
+        }
+        elseif ($appToServicePrincipal.ContainsKey([string]$association.SourceObjectId)) {
+            $servicePrincipalId = [string]$appToServicePrincipal[[string]$association.SourceObjectId]
+        }
+        if ([string]::IsNullOrWhiteSpace($servicePrincipalId)) { continue }
+
+        $highImpactPermissions = @(if ($highImpactPermissionsByPrincipal.ContainsKey($servicePrincipalId)) { $highImpactPermissionsByPrincipal[$servicePrincipalId] })
+        $activeRoles = @(if ($activeRolesByPrincipal.ContainsKey($servicePrincipalId)) { $activeRolesByPrincipal[$servicePrincipalId] })
+        if ($highImpactPermissions.Count -eq 0 -and $activeRoles.Count -eq 0) { continue }
+
+        $sourceObject = if ($sourceObjectsById.ContainsKey([string]$association.SourceObjectId)) { $sourceObjectsById[[string]$association.SourceObjectId] } else { $null }
+        $affectedApplication = New-InspectorAffectedObjectFromSourceObject -SourceObject $sourceObject -FallbackObjectType ([string]$association.SourceObjectType) -FallbackObjectId ([string]$association.SourceObjectId) -FallbackDisplayName ([string]$association.SourceObjectId)
+        $permissionEvidenceIds = @($highImpactPermissions | ForEach-Object { [string](Get-InspectorObservationProperty -InputObject $_ -Name 'RelationshipEvidenceId') } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        $roleEvidenceIds = @(Get-InspectorObservationRelationshipEvidenceIds -Items $activeRoles)
+        $ownerEvidenceIds = @(Get-InspectorObservationRelationshipEvidenceIds -Items @($association.Relationships))
+        $permissionNames = @($highImpactPermissions | ForEach-Object { [string](Get-InspectorObservationProperty -InputObject $_ -Name 'PermissionName') } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
+        $roleDisplayNames = @($activeRoles | ForEach-Object { [string](Get-InspectorObservationMetadataValue -InputObject $_ -Name 'RoleDisplayName') } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
+        $privilegeSources = @()
+        if ($permissionNames.Count -gt 0) { $privilegeSources += 'HighImpactMicrosoftGraphApplicationPermission' }
+        if ($activeRoles.Count -gt 0) { $privilegeSources += 'ActiveDirectoryRole' }
+
+        $observations.Add(
+            (New-InspectorSecurityObservation `
+                -Category 'IdentityGovernance' `
+                -Title 'Privileged application identity has user owner' `
+                -Description "$($association.SourceObjectType) '$($affectedApplication.DisplayName)' is owned by a user and is correlated to service principal '$servicePrincipalId' with privileged authorization." `
+                -Severity 'Low' `
+                -Confidence 'High' `
+                -AffectedObject $affectedApplication `
+                -EvidenceIds @($ownerEvidenceIds + $permissionEvidenceIds + $roleEvidenceIds) `
+                -MicrosoftReference $applicationOwnerReference `
+                -WhyItMatters 'An owner can administer the application object they control, while the correlated workload identity may hold permissions or roles that exceed the owner user account. The owner therefore belongs in the privileged access review boundary.' `
+                -Limitations @('Ownership plus privilege is a governance control relationship, not proof of misuse, credential possession, or an executable privilege-escalation path.') `
+                -Recommendation 'Treat owners of privileged application identities as privileged administrators for review purposes and validate that ownership remains necessary and accountable.' `
+                -SourceRuleIds @('APP-PRIV-OWNER-001') `
+                -Metadata @{
+                    RelatedPrincipalId = [string]$association.OwnerId
+                    RelatedServicePrincipalId = $servicePrincipalId
+                    OwnershipObjectId = [string]$association.SourceObjectId
+                    OwnershipObjectType = [string]$association.SourceObjectType
+                    PermissionNames = @($permissionNames)
+                    RoleDisplayNames = @($roleDisplayNames)
+                    PrivilegeSources = @($privilegeSources)
+                    EvidenceSupportType = 'DerivedFromTenantCollection'
+                    SignalDisposition = 'Review'
+                })
+        )
+
+        if ($riskByUserId.ContainsKey([string]$association.OwnerId)) {
+            $riskArtifact = $riskByUserId[[string]$association.OwnerId]
+            $riskState = [string](Get-InspectorObservationProperty -InputObject $riskArtifact -Name 'RiskState')
+            if ($riskState -in @('atRisk', 'confirmedCompromised')) {
+                $riskLevel = [string](Get-InspectorObservationProperty -InputObject $riskArtifact -Name 'RiskLevel')
+                $ownerSourceObject = if ($sourceObjectsById.ContainsKey([string]$association.OwnerId)) { $sourceObjectsById[[string]$association.OwnerId] } else { $null }
+                $affectedOwner = New-InspectorAffectedObjectFromSourceObject -SourceObject $ownerSourceObject -FallbackObjectType 'User' -FallbackObjectId ([string]$association.OwnerId) -FallbackDisplayName ([string]$association.OwnerId)
+                $riskEvidenceId = [string](Get-InspectorObservationProperty -InputObject $riskArtifact -Name 'EvidenceId')
+                $observations.Add(
+                    (New-InspectorSecurityObservation `
+                        -Category 'Users' `
+                        -Title 'Risky user owns privileged application identity' `
+                        -Description "Risky user '$($affectedOwner.DisplayName)' owns $($association.SourceObjectType.ToLowerInvariant()) '$($affectedApplication.DisplayName)', whose correlated service principal has privileged authorization." `
+                        -Severity $(if ($riskLevel -ieq 'high') { 'High' } else { 'Medium' }) `
+                        -Confidence 'High' `
+                        -AffectedObject $affectedOwner `
+                        -EvidenceIds @(@($riskEvidenceId) + @($ownerEvidenceIds + $permissionEvidenceIds + $roleEvidenceIds)) `
+                        -MicrosoftReference $identityProtectionReference `
+                        -WhyItMatters 'Current unresolved user risk is materially more important when the same user controls an application identity that holds high-impact Graph permissions or active directory roles.' `
+                        -Limitations @('Risk state does not by itself prove compromise, and application ownership does not prove that the user currently possesses a workload credential.') `
+                        -Recommendation 'Investigate the risky user and validate or temporarily reduce ownership of the privileged application identity according to incident-response and access-governance procedures.' `
+                        -SourceRuleIds @('RISK-APP-OWNER-001') `
+                        -Metadata @{
+                            RelatedPrincipalId = [string]$association.OwnerId
+                            RelatedServicePrincipalId = $servicePrincipalId
+                            OwnershipObjectId = [string]$association.SourceObjectId
+                            OwnershipObjectType = [string]$association.SourceObjectType
+                            RiskLevel = $riskLevel
+                            RiskState = $riskState
+                            PermissionNames = @($permissionNames)
+                            RoleDisplayNames = @($roleDisplayNames)
+                            PrivilegeSources = @($privilegeSources)
+                            EvidenceSupportType = 'DerivedFromTenantCollection'
+                        })
+                )
+            }
+        }
+    }
+
+    # Build user -> group membership associations from either the user's
+    # transitive membership view or the group's direct member view.
+    $membershipAssociations = @{}
+    foreach ($relationship in @($relationships)) {
+        $relationshipType = [string](Get-InspectorObservationProperty -InputObject $relationship -Name 'RelationshipType')
+        $sourceType = [string](Get-InspectorObservationProperty -InputObject $relationship -Name 'SourceObjectType')
+        $targetType = [string](Get-InspectorObservationProperty -InputObject $relationship -Name 'TargetObjectType')
+        $userId = ''
+        $groupId = ''
+        if ($relationshipType -eq 'MemberOfGroup' -and $sourceType -ieq 'User' -and $targetType -ieq 'Group') {
+            $userId = [string](Get-InspectorObservationProperty -InputObject $relationship -Name 'SourceObjectId')
+            $groupId = [string](Get-InspectorObservationProperty -InputObject $relationship -Name 'TargetObjectId')
+        }
+        elseif ($relationshipType -eq 'HasMember' -and $sourceType -ieq 'Group' -and $targetType -ieq 'User') {
+            $userId = [string](Get-InspectorObservationProperty -InputObject $relationship -Name 'TargetObjectId')
+            $groupId = [string](Get-InspectorObservationProperty -InputObject $relationship -Name 'SourceObjectId')
+        }
+        if ([string]::IsNullOrWhiteSpace($userId) -or [string]::IsNullOrWhiteSpace($groupId)) { continue }
+
+        $key = "$userId|$groupId"
+        if (-not $membershipAssociations.ContainsKey($key)) {
+            $membershipAssociations[$key] = [PSCustomObject][ordered]@{
+                UserId = $userId
+                GroupId = $groupId
+                Relationships = [System.Collections.Generic.List[object]]::new()
+            }
+        }
+        $membershipAssociations[$key].Relationships.Add($relationship)
+    }
+
+    foreach ($association in @($membershipAssociations.Values)) {
+        $userId = [string]$association.UserId
+        $groupId = [string]$association.GroupId
+        if (-not $riskByUserId.ContainsKey($userId)) { continue }
+        $riskArtifact = $riskByUserId[$userId]
+        $riskState = [string](Get-InspectorObservationProperty -InputObject $riskArtifact -Name 'RiskState')
+        if ($riskState -notin @('atRisk', 'confirmedCompromised')) { continue }
+
+        $activeRoles = @(if ($activeRolesByPrincipal.ContainsKey($groupId)) { $activeRolesByPrincipal[$groupId] })
+        $eligibleRoles = @(if ($eligibleRolesByPrincipal.ContainsKey($groupId)) { $eligibleRolesByPrincipal[$groupId] })
+        if ($activeRoles.Count -eq 0 -and $eligibleRoles.Count -eq 0) { continue }
+
+        $riskLevel = [string](Get-InspectorObservationProperty -InputObject $riskArtifact -Name 'RiskLevel')
+        $userSourceObject = if ($sourceObjectsById.ContainsKey($userId)) { $sourceObjectsById[$userId] } else { $null }
+        $affectedUser = New-InspectorAffectedObjectFromSourceObject -SourceObject $userSourceObject -FallbackObjectType 'User' -FallbackObjectId $userId -FallbackDisplayName $userId
+        $groupSourceObject = if ($sourceObjectsById.ContainsKey($groupId)) { $sourceObjectsById[$groupId] } else { $null }
+        $groupDisplayName = if ($null -ne $groupSourceObject) { Get-InspectorObservationDisplayName -InputObject $groupSourceObject } else { $groupId }
+        $membershipEvidenceIds = @(Get-InspectorObservationRelationshipEvidenceIds -Items @($association.Relationships))
+        $riskEvidenceId = [string](Get-InspectorObservationProperty -InputObject $riskArtifact -Name 'EvidenceId')
+        $activeRoleEvidenceIds = @(Get-InspectorObservationRelationshipEvidenceIds -Items $activeRoles)
+        $eligibleRoleEvidenceIds = @(Get-InspectorObservationRelationshipEvidenceIds -Items $eligibleRoles)
+        $restrictedManagementPrivilege = @(
+            @($activeRoles + $eligibleRoles) |
+                Where-Object { (Get-InspectorObservationMetadataValue -InputObject $_ -Name 'AdministrativeUnitRestrictedManagement') -eq $true }
+        ).Count -gt 0
+
+        if ($activeRoles.Count -gt 0) {
+            $roleNames = @($activeRoles | ForEach-Object { [string](Get-InspectorObservationMetadataValue -InputObject $_ -Name 'RoleDisplayName') } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
+            $observations.Add(
+                (New-InspectorSecurityObservation `
+                    -Category 'Users' `
+                    -Title 'Risky user inherits active directory privilege through group' `
+                    -Description "Risky user '$($affectedUser.DisplayName)' is a collected member of privileged group '$groupDisplayName', which has active Microsoft Entra directory-role context." `
+                    -Severity $(if ($riskLevel -ieq 'high') { 'High' } else { 'Medium' }) `
+                    -Confidence 'High' `
+                    -AffectedObject $affectedUser `
+                    -EvidenceIds @(@($riskEvidenceId) + @($membershipEvidenceIds + $activeRoleEvidenceIds)) `
+                    -MicrosoftReference $roleAssignableGroupReference `
+                    -WhyItMatters 'Microsoft Entra role assignments to groups are inherited by group members, so unresolved user risk on a member of an actively privileged group is also privileged-identity risk.' `
+                    -Limitations @('Membership is based on collected group relationship evidence; the observation does not prove malicious use of the inherited role.') `
+                    -Recommendation 'Investigate the user risk and validate both the group membership and the group role assignment.' `
+                    -SourceRuleIds @('RISK-GROUP-PRIV-001') `
+                    -Metadata @{
+                        RelatedPrincipalId = $userId
+                        RelatedGroupId = $groupId
+                        RiskLevel = $riskLevel
+                        RiskState = $riskState
+                        RoleDisplayNames = @($roleNames)
+                        PrivilegeState = 'Active'
+                        RestrictedManagementAdministrativeUnitPrivilege = [bool]$restrictedManagementPrivilege
+                        EvidenceSupportType = 'DerivedFromTenantCollection'
+                    })
+            )
+        }
+        elseif ($eligibleRoles.Count -gt 0) {
+            $roleNames = @($eligibleRoles | ForEach-Object { [string](Get-InspectorObservationMetadataValue -InputObject $_ -Name 'RoleDisplayName') } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
+            $observations.Add(
+                (New-InspectorSecurityObservation `
+                    -Category 'Users' `
+                    -Title 'Risky user is eligible for directory privilege through group' `
+                    -Description "Risky user '$($affectedUser.DisplayName)' is a collected member of group '$groupDisplayName', which is eligible to activate Microsoft Entra directory-role context." `
+                    -Severity 'Medium' `
+                    -Confidence 'High' `
+                    -AffectedObject $affectedUser `
+                    -EvidenceIds @(@($riskEvidenceId) + @($membershipEvidenceIds + $eligibleRoleEvidenceIds)) `
+                    -MicrosoftReference $pimReference `
+                    -WhyItMatters 'When a group is PIM-eligible for a Microsoft Entra role, its members can become eligible to activate that role. Unresolved identity risk therefore deserves review even though the privilege is not currently active.' `
+                    -Limitations @('Eligibility is not active privilege. Activation controls such as approval, MFA, justification, and duration are not inferred unless separately collected.') `
+                    -Recommendation 'Investigate the user risk and validate whether group-based PIM eligibility remains appropriate.' `
+                    -SourceRuleIds @('RISK-GROUP-PIM-001') `
+                    -Metadata @{
+                        RelatedPrincipalId = $userId
+                        RelatedGroupId = $groupId
+                        RiskLevel = $riskLevel
+                        RiskState = $riskState
+                        RoleDisplayNames = @($roleNames)
+                        PrivilegeState = 'Eligible'
+                        RestrictedManagementAdministrativeUnitPrivilege = [bool]$restrictedManagementPrivilege
+                        EvidenceSupportType = 'DerivedFromTenantCollection'
+                    })
+            )
+        }
+    }
+
+    # Risky ownership of a group that already has active or eligible directory
+    # privilege. Group ownership is a delegated management boundary, while the
+    # role state determines whether the group itself is actively privileged or
+    # only eligible for activation.
+    foreach ($association in @($ownershipAssociations.Values | Where-Object { $_.SourceObjectType -eq 'Group' })) {
+        $groupId = [string]$association.SourceObjectId
+        $ownerId = [string]$association.OwnerId
+        if (-not $riskByUserId.ContainsKey($ownerId)) { continue }
+        $riskArtifact = $riskByUserId[$ownerId]
+        $riskState = [string](Get-InspectorObservationProperty -InputObject $riskArtifact -Name 'RiskState')
+        if ($riskState -notin @('atRisk', 'confirmedCompromised')) { continue }
+
+        $activeRoles = @(if ($activeRolesByPrincipal.ContainsKey($groupId)) { $activeRolesByPrincipal[$groupId] })
+        $eligibleRoles = @(if ($eligibleRolesByPrincipal.ContainsKey($groupId)) { $eligibleRolesByPrincipal[$groupId] })
+        if ($activeRoles.Count -eq 0 -and $eligibleRoles.Count -eq 0) { continue }
+
+        $riskLevel = [string](Get-InspectorObservationProperty -InputObject $riskArtifact -Name 'RiskLevel')
+        $ownerSourceObject = if ($sourceObjectsById.ContainsKey($ownerId)) { $sourceObjectsById[$ownerId] } else { $null }
+        $affectedOwner = New-InspectorAffectedObjectFromSourceObject -SourceObject $ownerSourceObject -FallbackObjectType 'User' -FallbackObjectId $ownerId -FallbackDisplayName $ownerId
+        $groupSourceObject = if ($sourceObjectsById.ContainsKey($groupId)) { $sourceObjectsById[$groupId] } else { $null }
+        $groupDisplayName = if ($null -ne $groupSourceObject) { Get-InspectorObservationDisplayName -InputObject $groupSourceObject } else { $groupId }
+        $roleEvidenceIds = @(Get-InspectorObservationRelationshipEvidenceIds -Items @($activeRoles + $eligibleRoles))
+        $ownerEvidenceIds = @(Get-InspectorObservationRelationshipEvidenceIds -Items @($association.Relationships))
+        $riskEvidenceId = [string](Get-InspectorObservationProperty -InputObject $riskArtifact -Name 'EvidenceId')
+        $privilegeState = if ($activeRoles.Count -gt 0) { 'Active' } else { 'Eligible' }
+        $roleNames = @(@($activeRoles + $eligibleRoles) | ForEach-Object { [string](Get-InspectorObservationMetadataValue -InputObject $_ -Name 'RoleDisplayName') } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
+
+        $observations.Add(
+            (New-InspectorSecurityObservation `
+                -Category 'Users' `
+                -Title 'Risky user owns privileged group' `
+                -Description "Risky user '$($affectedOwner.DisplayName)' owns group '$groupDisplayName', which has $($privilegeState.ToLowerInvariant()) Microsoft Entra directory-role context." `
+                -Severity $(if ($privilegeState -eq 'Active' -and $riskLevel -ieq 'high') { 'High' } else { 'Medium' }) `
+                -Confidence 'High' `
+                -AffectedObject $affectedOwner `
+                -EvidenceIds @(@($riskEvidenceId) + @($ownerEvidenceIds + $roleEvidenceIds)) `
+                -MicrosoftReference $roleAssignableGroupReference `
+                -WhyItMatters 'Owners can be delegated management of role-assignable groups, so unresolved user risk on an owner belongs in the privileged group governance boundary.' `
+                -Limitations @('Ownership does not prove the owner changed membership or activated privilege. Eligible role state is not active privilege.') `
+                -Recommendation 'Investigate the user risk and validate whether ownership of the privileged group remains necessary.' `
+                -SourceRuleIds @('RISK-GROUP-OWNER-001') `
+                -Metadata @{
+                    RelatedPrincipalId = $ownerId
+                    RelatedGroupId = $groupId
+                    RiskLevel = $riskLevel
+                    RiskState = $riskState
+                    RoleDisplayNames = @($roleNames)
+                    PrivilegeState = $privilegeState
+                    EvidenceSupportType = 'DerivedFromTenantCollection'
+                })
+        )
+    }
+
+    return @($observations)
 }

@@ -89,9 +89,9 @@ function Add-InspectorPermissionIntelligence {
         -InputObject $ObjectInsight `
         -Name 'PermissionIntelligence' `
         -Value ([PSCustomObject][ordered]@{
-            SchemaVersion          = '0.5.0'
+            SchemaVersion          = '0.6.0'
             GeneratedAt            = (Get-Date).ToUniversalTime().ToString('o')
-            CatalogVersion         = '0.5.0'
+            CatalogVersion         = '0.6.0'
             PermissionInsightCount = @($permissionInsights).Count
             CatalogEntryCount      = @(Get-InspectorPermissionCatalog).Count
             EnrichmentMode         = 'LocalCatalogOnly'

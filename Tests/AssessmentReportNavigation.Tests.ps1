@@ -243,7 +243,7 @@ Describe 'HTML report experience validation' {
 
             $html | Should -Not -Match 'Top Actions'
             $html | Should -Not -Match 'These actions are rendered from existing assessment recommendations only'
-            $html | Should -Match 'Recommendation:</strong> Review high-impact permissions.'
+            $html | Should -Match 'Recommended action:</strong> Review high-impact permissions.'
         }
 
         It 'exports validated single-file HTML without changing architectural invariants' {
@@ -279,6 +279,38 @@ Describe 'HTML report experience validation' {
             $content | Should -Not -Match 'href="#"'
         }
 
+        It 'renders service-principal role and administrative-unit inventory navigation when source identifiers are available' {
+            $snapshot = [PSCustomObject]@{
+                Collections = [PSCustomObject]@{
+                    Users = @()
+                    Groups = @()
+                    Applications = @()
+                    ServicePrincipals = @([PSCustomObject]@{ id='sp-1'; appId='client-1'; displayName='Automation SP' })
+                    DirectoryRoleDefinitions = @([PSCustomObject]@{ id='role-1'; displayName='Directory Readers' })
+                    DirectoryRoleAssignments = @([PSCustomObject]@{ id='assignment-1'; principalId='sp-1'; roleDefinitionId='role-1'; directoryScopeId='/' })
+                    RoleAssignmentScheduleInstances = @()
+                    RoleEligibilityScheduleInstances = @()
+                    AdministrativeUnits = @([PSCustomObject]@{ id='au-1'; displayName='Tier Zero'; description='Privileged scope'; visibility='Public'; isMemberManagementRestricted=$true })
+                    SubscribedSkus = @()
+                    RiskyUsers = @()
+                }
+            }
+            $details = ConvertTo-InspectorInventoryDetails -TenantSnapshot $snapshot
+            $details.DirectoryRoleAssignments[0].AppId | Should -Be 'client-1'
+            $details.AdministrativeUnits[0].ObjectType | Should -Be 'AdministrativeUnit'
+
+            $model = [PSCustomObject]@{
+                Summary = [PSCustomObject]@{ TenantId = 'tenant-1' }
+                InventoryDetails = $details
+            }
+
+            $roleHtml = New-InspectorInventoryDetailHtml -ReportModel $model -PropertyName 'DirectoryRoleAssignments' -Title 'Directory role assignments' -Columns @('Principal','PrincipalType','Role','Scope','AssignmentId')
+            $auHtml = New-InspectorInventoryDetailHtml -ReportModel $model -PropertyName 'AdministrativeUnits' -Title 'Administrative units' -Columns @('DisplayName','Description','Visibility','RestrictedManagement')
+
+            $roleHtml | Should -Match 'entra\.microsoft\.com/tenant-1/.+objectId/sp-1/appId/client-1'
+            $auHtml | Should -Match 'href="https://entra\.microsoft\.com/tenant-1"'
+        }
+
         It 'renders object-specific Open in Entra links only when identifiers support them' {
             $observations = @(
                 New-TestReportObservation `
@@ -293,10 +325,15 @@ Describe 'HTML report experience validation' {
 
             $html | Should -Not -Match 'href="#"'
             $html | Should -Not -Match 'onclick="return false"'
-            Get-InspectorPortalLink -ObjectType 'User' -ObjectId 'user-1' | Should -Match 'entra\.microsoft\.com'
-            Get-InspectorPortalLink -ObjectType 'Group' -ObjectId 'group-1' | Should -Match 'entra\.microsoft\.com'
-            Get-InspectorPortalLink -ObjectType 'Application' -ObjectId 'app-object-1' -AppId 'client-1' | Should -Match 'appId/client-1'
-            Get-InspectorPortalLink -ObjectType 'ServicePrincipal' -ObjectId 'sp-1' -AppId 'client-1' | Should -Match 'objectId/sp-1'
+            Get-InspectorTenantPortalBaseUrl -TenantId 'tenant-1' | Should -Be 'https://entra.microsoft.com/tenant-1'
+            Get-InspectorPortalLink -ObjectType 'User' -ObjectId 'user-1' -TenantId 'tenant-1' | Should -Match 'entra\.microsoft\.com/tenant-1/.+userId/user-1'
+            Get-InspectorPortalLink -ObjectType 'Group' -ObjectId 'group-1' -TenantId 'tenant-1' | Should -Match 'entra\.microsoft\.com/tenant-1/.+groupId/group-1'
+            Get-InspectorPortalLink -ObjectType 'Application' -ObjectId 'app-object-1' -AppId 'client-1' -TenantId 'tenant-1' | Should -Match 'appId/client-1'
+            Get-InspectorPortalLink -ObjectType 'ServicePrincipal' -ObjectId 'sp-1' -AppId 'client-1' -TenantId 'tenant-1' | Should -Match 'objectId/sp-1'
+            Get-InspectorPortalLink -ObjectType 'RiskyUser' -ObjectId 'user-1' -TenantId 'tenant-1' | Should -Match 'userId/user-1'
+            Get-InspectorPortalLink -ObjectType 'DirectoryRole' -TenantId 'tenant-1' | Should -Match 'RolesManagementMenuBlade'
+            Get-InspectorPortalLink -ObjectType 'PimRole' -TenantId 'tenant-1' | Should -Match 'PIMCommon'
+            Get-InspectorPortalLink -ObjectType 'AdministrativeUnit' -ObjectId 'au-1' -TenantId 'tenant-1' | Should -Be 'https://entra.microsoft.com/tenant-1'
             Get-InspectorPortalLink -ObjectType 'Application' -ObjectId 'app-object-1' | Should -BeNullOrEmpty
             Get-InspectorPortalLink -ObjectType 'ServicePrincipal' -ObjectId 'sp-1' | Should -BeNullOrEmpty
         }

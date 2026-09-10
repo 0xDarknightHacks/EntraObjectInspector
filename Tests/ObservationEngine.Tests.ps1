@@ -51,6 +51,7 @@ Describe 'Security Observation Engine' {
                 param (
                     [string]$RelationshipType,
                     [string]$SourceObjectId,
+                    [string]$SourceObjectType = 'Application',
                     [string]$TargetObjectId = 'target-1',
                     [string]$TargetObjectType = 'User',
                     [string]$TargetDisplayName = 'Target',
@@ -61,7 +62,7 @@ Describe 'Security Observation Engine' {
                 [PSCustomObject]@{
                     RelationshipType = $RelationshipType
                     SourceObjectId = $SourceObjectId
-                    SourceObjectType = 'Application'
+                    SourceObjectType = $SourceObjectType
                     TargetObjectId = $TargetObjectId
                     TargetObjectType = $TargetObjectType
                     TargetDisplayName = $TargetDisplayName
@@ -757,6 +758,98 @@ Describe 'Security Observation Engine' {
 
             (Get-ObservationByTitle -Result $result -Title 'Group is nested into privileged group') |
                 Should -Not -BeNullOrEmpty
+        }
+
+        It 'detects service-principal privilege concentration with complete relationship evidence' {
+            $sp = New-TestSourceObject -ObjectType 'ServicePrincipal' -ObjectId 'sp-priv-1' -Properties @{ DisplayName = 'Privileged Workload'; AppId = 'client-priv-1' }
+            $permission = [PSCustomObject]@{
+                PermissionName = 'RoleManagement.ReadWrite.Directory'
+                SourceObjectId = 'sp-priv-1'
+                ResourceDisplayName = 'Microsoft Graph'
+                ResourceAppId = '00000003-0000-0000-c000-000000000000'
+                IsHighImpact = $true
+                RelationshipEvidenceId = 'ev-perm-priv'
+            }
+            $role = New-TestRelationship -RelationshipType 'AssignedDirectoryRole' -SourceObjectId 'sp-priv-1' -SourceObjectType 'ServicePrincipal' -TargetObjectType 'DirectoryRoleDefinition' -TargetObjectId 'role-def-priv' -EvidenceId 'ev-role-primary' -Metadata @{ RoleDefinitionId = 'role-def-priv'; RoleDisplayName = 'Privileged Role'; ScopeType = 'Tenant'; EvidenceIds = @('ev-role-primary','ev-role-reconciled') }
+
+            $result = Invoke-InspectorObservationEngine -ObjectInsight (New-TestObjectInsight -SourceObjects @($sp) -Relationships @($role) -PermissionInsights @($permission))
+            $observation = Get-ObservationByTitle -Result $result -Title 'Service principal combines high-impact Graph permission and directory role'
+
+            $observation | Should -Not -BeNullOrEmpty
+            $observation.Severity | Should -Be 'High'
+            @($observation.EvidenceIds) | Should -Contain 'ev-perm-priv'
+            @($observation.EvidenceIds) | Should -Contain 'ev-role-primary'
+            @($observation.EvidenceIds) | Should -Contain 'ev-role-reconciled'
+        }
+
+        It 'detects service-principal role scope over a restricted management administrative unit' {
+            $sp = New-TestSourceObject -ObjectType 'ServicePrincipal' -ObjectId 'sp-au-1' -Properties @{ DisplayName = 'AU Workload'; AppId = 'client-au-1' }
+            $role = New-TestRelationship -RelationshipType 'AssignedDirectoryRole' -SourceObjectId 'sp-au-1' -SourceObjectType 'ServicePrincipal' -TargetObjectType 'DirectoryRoleDefinition' -TargetObjectId 'role-def-au' -EvidenceId 'ev-au-role' -Metadata @{ RoleDefinitionId = 'role-def-au'; RoleDisplayName = 'User Administrator'; ScopeType = 'AdministrativeUnit'; AdministrativeUnitId = 'au-1'; AdministrativeUnitDisplayName = 'Restricted AU'; AdministrativeUnitRestrictedManagement = $true; EvidenceIds = @('ev-au-role','ev-au-scope') }
+
+            $result = Invoke-InspectorObservationEngine -ObjectInsight (New-TestObjectInsight -SourceObjects @($sp) -Relationships @($role))
+            $observation = Get-ObservationByTitle -Result $result -Title 'Service principal has role over restricted management administrative unit'
+
+            $observation | Should -Not -BeNullOrEmpty
+            $observation.Severity | Should -Be 'Medium'
+            $observation.Metadata.AdministrativeUnitId | Should -Be 'au-1'
+            @($observation.EvidenceIds) | Should -Contain 'ev-au-scope'
+        }
+
+        It 'distinguishes risky users with eligible-only privileged context from active privilege' {
+            $user = New-TestSourceObject -ObjectType 'User' -ObjectId 'user-eligible-1' -Properties @{ DisplayName = 'Eligible Risk User' }
+            $eligible = New-TestRelationship -RelationshipType 'EligibleDirectoryRoleScheduleInstance' -SourceObjectId 'user-eligible-1' -SourceObjectType 'User' -TargetObjectType 'DirectoryRoleDefinition' -TargetObjectId 'role-def-eligible' -EvidenceId 'ev-eligible-role' -Metadata @{ RoleDefinitionId = 'role-def-eligible'; RoleDisplayName = 'Privileged Role'; ScopeType = 'Tenant'; EvidenceIds = @('ev-eligible-role','ev-eligible-reconciled') }
+            $risk = [PSCustomObject]@{ ArtifactType='RiskyUserContext'; SourceObjectType='User'; SourceObjectId='user-eligible-1'; RiskLevel='high'; RiskState='atRisk'; EvidenceId='ev-risk-eligible' }
+
+            $result = Invoke-InspectorObservationEngine -ObjectInsight (New-TestObjectInsight -SourceObjects @($user) -Relationships @($eligible) -Artifacts @($risk))
+            $observation = Get-ObservationByTitle -Result $result -Title 'Risky user has eligible privileged context'
+
+            $observation | Should -Not -BeNullOrEmpty
+            $observation.Severity | Should -Be 'Medium'
+            $observation.Metadata.HasEligiblePrivilegedContext | Should -BeTrue
+            $observation.Metadata.HasActivePrivilegedContext | Should -BeFalse
+            @($observation.EvidenceIds) | Should -Contain 'ev-eligible-reconciled'
+        }
+
+        It 'treats active PIM group role state with members as active privilege' {
+            $group = New-TestSourceObject -ObjectType 'Group' -ObjectId 'group-active-pim' -Properties @{ DisplayName = 'Active PIM Group' }
+            $member = New-TestRelationship -RelationshipType 'HasMember' -SourceObjectId 'group-active-pim' -SourceObjectType 'Group' -TargetObjectType 'User' -TargetObjectId 'user-member-1' -EvidenceId 'ev-member-active'
+            $active = New-TestRelationship -RelationshipType 'ActiveDirectoryRoleScheduleInstance' -SourceObjectId 'group-active-pim' -SourceObjectType 'Group' -TargetObjectType 'DirectoryRoleDefinition' -TargetObjectId 'role-active-pim' -EvidenceId 'ev-active-pim' -Metadata @{ RoleDefinitionId='role-active-pim'; RoleDisplayName='Privileged Role'; ScopeType='Tenant'; EvidenceIds=@('ev-active-pim','ev-active-pim-reconciled') }
+
+            $result = Invoke-InspectorObservationEngine -ObjectInsight (New-TestObjectInsight -SourceObjects @($group) -Relationships @($member,$active))
+            $observation = Get-ObservationByTitle -Result $result -Title 'Privileged group has members'
+
+            $observation | Should -Not -BeNullOrEmpty
+            $observation.Severity | Should -Be 'High'
+            $observation.Metadata.ActivePimRoleRelationshipCount | Should -Be 1
+            @($observation.EvidenceIds) | Should -Contain 'ev-active-pim-reconciled'
+        }
+
+        It 'keeps eligible-only privileged group membership distinct from active privilege' {
+            $group = New-TestSourceObject -ObjectType 'Group' -ObjectId 'group-eligible-pim' -Properties @{ DisplayName = 'Eligible PIM Group' }
+            $member = New-TestRelationship -RelationshipType 'HasMember' -SourceObjectId 'group-eligible-pim' -SourceObjectType 'Group' -TargetObjectType 'User' -TargetObjectId 'user-member-2' -EvidenceId 'ev-member-eligible'
+            $eligible = New-TestRelationship -RelationshipType 'EligibleDirectoryRoleScheduleInstance' -SourceObjectId 'group-eligible-pim' -SourceObjectType 'Group' -TargetObjectType 'DirectoryRoleDefinition' -TargetObjectId 'role-eligible-pim' -EvidenceId 'ev-eligible-pim' -Metadata @{ RoleDefinitionId='role-eligible-pim'; RoleDisplayName='Privileged Role'; ScopeType='Tenant'; EvidenceIds=@('ev-eligible-pim','ev-eligible-pim-reconciled') }
+
+            $result = Invoke-InspectorObservationEngine -ObjectInsight (New-TestObjectInsight -SourceObjects @($group) -Relationships @($member,$eligible))
+            $observation = Get-ObservationByTitle -Result $result -Title 'PIM-eligible privileged group has members'
+
+            $observation | Should -Not -BeNullOrEmpty
+            $observation.Severity | Should -Be 'Medium'
+            $observation.Metadata.EligiblePimRoleRelationshipCount | Should -Be 1
+            @($observation.EvidenceIds) | Should -Contain 'ev-eligible-pim-reconciled'
+            (Get-ObservationByTitle -Result $result -Title 'Privileged group has members') | Should -BeNullOrEmpty
+        }
+
+        It 'detects delegated ownership of privileged groups and preserves owner evidence' {
+            $group = New-TestSourceObject -ObjectType 'Group' -ObjectId 'group-owner-priv' -Properties @{ DisplayName = 'Owned Privileged Group'; IsAssignableToRole = $true }
+            $owner = New-TestRelationship -RelationshipType 'OwnedBy' -SourceObjectId 'group-owner-priv' -SourceObjectType 'Group' -TargetObjectType 'User' -TargetObjectId 'user-owner-1' -EvidenceId 'ev-owner-primary' -Metadata @{ EvidenceIds=@('ev-owner-primary','ev-owner-reconciled') }
+
+            $result = Invoke-InspectorObservationEngine -ObjectInsight (New-TestObjectInsight -SourceObjects @($group) -Relationships @($owner))
+            $observation = Get-ObservationByTitle -Result $result -Title 'Privileged group has delegated owner control'
+
+            $observation | Should -Not -BeNullOrEmpty
+            $observation.Severity | Should -Be 'Medium'
+            $observation.Metadata.OwnerCount | Should -Be 1
+            @($observation.EvidenceIds) | Should -Contain 'ev-owner-reconciled'
         }
 
         It 'preserves late-source relationship observations when relationship volume is high' {

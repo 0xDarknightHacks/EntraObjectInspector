@@ -133,6 +133,18 @@ function New-InspectorHtmlTable {
 
                 $html.Add("<td>$links</td>")
             }
+            elseif ($column -eq 'PortalLink') {
+                $portalUrl = [string]$value
+                if (
+                    $portalUrl.Equals('https://entra.microsoft.com', [System.StringComparison]::OrdinalIgnoreCase) -or
+                    $portalUrl.StartsWith('https://entra.microsoft.com/', [System.StringComparison]::OrdinalIgnoreCase)
+                ) {
+                    $html.Add("<td><a href=""$(ConvertTo-InspectorHtmlEncodedText $portalUrl)"" target=""_blank"" rel=""noopener noreferrer"">Open in Entra</a></td>")
+                }
+                else {
+                    $html.Add('<td></td>')
+                }
+            }
             else {
                 $html.Add("<td>$(ConvertTo-InspectorHtmlEncodedText $value)</td>")
             }
@@ -223,12 +235,17 @@ function Get-InspectorReportNormalizedObjectType {
 
     switch -Regex ($value) {
         '^user$' { return 'User' }
+        '^riskyuser$' { return 'RiskyUser' }
         '^group$' { return 'Group' }
         '^application$' { return 'Application' }
         '^service\s*principal$' { return 'ServicePrincipal' }
         '^serviceprincipal$' { return 'ServicePrincipal' }
         '^applicationidentity$' { return 'ApplicationIdentity' }
         '^oauth2permissiongrant$' { return 'OAuth2PermissionGrant' }
+        '^administrative\s*unit$' { return 'AdministrativeUnit' }
+        '^administrativeunit$' { return 'AdministrativeUnit' }
+        '^directory\s*role.*$' { return 'DirectoryRole' }
+        '^pim.*$' { return 'PimRole' }
         default { return $value }
     }
 }
@@ -242,25 +259,82 @@ function New-InspectorClientTenantDetailsHtml {
 
     $summary = Get-InspectorReportProperty -InputObject $ReportModel -Name 'Summary'
     $manifest = Get-InspectorReportProperty -InputObject $ReportModel -Name 'Manifest'
-    $orchestration = Get-InspectorReportProperty -InputObject $ReportModel -Name 'OrchestrationTelemetry'
-
-    $rows = @(
-        [PSCustomObject]@{ Field='Client'; Value=$(if ([string]::IsNullOrWhiteSpace([string]$ReportModel.ClientName)) { 'Not provided' } else { $ReportModel.ClientName }) }
-        [PSCustomObject]@{ Field='Consultant'; Value=$(if ([string]::IsNullOrWhiteSpace([string]$ReportModel.ConsultantName)) { 'Not provided' } else { $ReportModel.ConsultantName }) }
-        [PSCustomObject]@{ Field='Tenant ID'; Value=$(if (Get-InspectorReportMetricValue -InputObject $summary -Names @('TenantId','TenantID')) { Get-InspectorReportMetricValue -InputObject $summary -Names @('TenantId','TenantID') } else { 'Not provided' }) }
-        [PSCustomObject]@{ Field='Tenant name'; Value=$(if (Get-InspectorReportMetricValue -InputObject $summary -Names @('TenantDisplayName','TenantName','DisplayName')) { Get-InspectorReportMetricValue -InputObject $summary -Names @('TenantDisplayName','TenantName','DisplayName') } else { 'Not provided' }) }
-        [PSCustomObject]@{ Field='Run ID'; Value=$(if (Get-InspectorReportProperty -InputObject $ReportModel -Name 'RunId') { Get-InspectorReportProperty -InputObject $ReportModel -Name 'RunId' } else { Get-InspectorReportMetricValue -InputObject $manifest -Names @('RunId','ExportId') }) }
-        [PSCustomObject]@{ Field='Report ID'; Value=(Get-InspectorReportProperty -InputObject $ReportModel -Name 'ReportId') }
-        [PSCustomObject]@{ Field='Report generated'; Value=(Get-InspectorReportProperty -InputObject $ReportModel -Name 'GeneratedAt') }
-        [PSCustomObject]@{ Field='Runtime at report generation'; Value=(ConvertTo-InspectorReportDuration (Get-InspectorReportProperty -InputObject $orchestration -Name 'TotalCommandDurationMs')) }
-        [PSCustomObject]@{ Field='Module version'; Value=$(if (Get-InspectorReportMetricValue -InputObject $manifest -Names @('ModuleVersion')) { Get-InspectorReportMetricValue -InputObject $manifest -Names @('ModuleVersion') } else { 'Not provided' }) }
+    $inventoryDetails = Get-InspectorReportProperty -InputObject $ReportModel -Name 'InventoryDetails'
+    $activeSkuNames = @(
+        @(Get-InspectorReportProperty -InputObject $inventoryDetails -Name 'ActiveSkus') |
+        ForEach-Object { Get-InspectorReportMetricValue -InputObject $_ -Names @('Product','SkuPartNumber','SkuId') } |
+        Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } |
+        Sort-Object -Unique
     )
+
+    $rows = [System.Collections.Generic.List[object]]::new()
+    $rows.Add([PSCustomObject]@{ Field='Tenant'; Value=$(if (Get-InspectorReportMetricValue -InputObject $summary -Names @('TenantDisplayName','TenantName','DisplayName')) { Get-InspectorReportMetricValue -InputObject $summary -Names @('TenantDisplayName','TenantName','DisplayName') } else { 'Not provided' }) })
+    $rows.Add([PSCustomObject]@{ Field='Tenant ID'; Value=$(if (Get-InspectorReportMetricValue -InputObject $summary -Names @('TenantId','TenantID')) { Get-InspectorReportMetricValue -InputObject $summary -Names @('TenantId','TenantID') } else { 'Not provided' }) })
+    $rows.Add([PSCustomObject]@{ Field='Active SKUs'; Value=$(if ($activeSkuNames.Count -gt 0) { $activeSkuNames -join ', ' } else { 'Not available' }) })
+    if (-not [string]::IsNullOrWhiteSpace([string]$ReportModel.ClientName)) { $rows.Add([PSCustomObject]@{ Field='Client'; Value=$ReportModel.ClientName }) }
+    if (-not [string]::IsNullOrWhiteSpace([string]$ReportModel.ConsultantName)) { $rows.Add([PSCustomObject]@{ Field='Prepared by'; Value=$ReportModel.ConsultantName }) }
+    $rows.Add([PSCustomObject]@{ Field='Generated'; Value=(Get-InspectorReportProperty -InputObject $ReportModel -Name 'GeneratedAt') })
+    $rows.Add([PSCustomObject]@{ Field='Module version'; Value=$(if (Get-InspectorReportMetricValue -InputObject $manifest -Names @('ModuleVersion')) { Get-InspectorReportMetricValue -InputObject $manifest -Names @('ModuleVersion') } else { 'Not provided' }) })
 
     return @"
 <section id="client-tenant-details" class="section">
-  <div class="section-header"><h2>Client / Tenant Details</h2><span class="muted">Assessment metadata</span></div>
+  <div class="section-header"><h2>Tenant details</h2><span class="muted">Assessment context</span></div>
   $(New-InspectorHtmlTable -Rows $rows -Columns @('Field','Value'))
+  <p class="muted">Tenant-level discovered licensing only; Active SKUs are not a per-user licensing compliance result.</p>
 </section>
+"@
+}
+
+function New-InspectorInventoryDetailHtml {
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory)][object]$ReportModel,
+        [Parameter(Mandatory)][string]$PropertyName,
+        [Parameter(Mandatory)][string]$Title,
+        [Parameter(Mandatory)][string[]]$Columns,
+        [int]$MaximumRows = 0
+    )
+
+    $inventoryDetails = Get-InspectorReportProperty -InputObject $ReportModel -Name 'InventoryDetails'
+    $allRows = @(Get-InspectorReportProperty -InputObject $inventoryDetails -Name $PropertyName | Where-Object { $null -ne $_ })
+    if ($allRows.Count -eq 0) { return '' }
+
+    $visibleRows = if ($MaximumRows -gt 0) { @($allRows | Select-Object -First $MaximumRows) } else { @($allRows) }
+    $displayRows = @(
+        foreach ($row in $visibleRows) {
+            $copy = [ordered]@{}
+            foreach ($column in $Columns) { $copy[$column] = Get-InspectorReportProperty -InputObject $row -Name $column }
+
+            $objectType = [string](Get-InspectorReportProperty -InputObject $row -Name 'ObjectType')
+            $objectId = [string](Get-InspectorReportProperty -InputObject $row -Name 'ObjectId')
+            $appId = [string](Get-InspectorReportProperty -InputObject $row -Name 'AppId')
+
+            $principalType = [string](Get-InspectorReportProperty -InputObject $row -Name 'PrincipalType')
+            $principalId = [string](Get-InspectorReportProperty -InputObject $row -Name 'PrincipalId')
+            if ([string]::IsNullOrWhiteSpace($objectType) -and -not [string]::IsNullOrWhiteSpace($principalType)) {
+                $objectType = $principalType
+                $objectId = $principalId
+            }
+
+            if ($PropertyName -eq 'AdministrativeUnits') {
+                $objectType = 'AdministrativeUnit'
+            }
+
+            $summary = Get-InspectorReportProperty -InputObject $ReportModel -Name 'Summary'
+            $tenantId = ConvertTo-InspectorReportString (Get-InspectorReportMetricValue -InputObject $summary -Names @('TenantId','TenantID'))
+            $copy.PortalLink = Get-InspectorPortalLink -ObjectType $objectType -ObjectId $objectId -AppId $appId -TenantId $tenantId
+            [PSCustomObject]$copy
+        }
+    )
+    $shownText = if ($visibleRows.Count -lt $allRows.Count) { "Showing $($visibleRows.Count) of $($allRows.Count)" } else { "$($allRows.Count) discovered" }
+    $tableColumns = @($Columns)
+    if (@($displayRows | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_.PortalLink) }).Count -gt 0) { $tableColumns += 'PortalLink' }
+
+    return @"
+<details class="inventory-detail">
+  <summary><span>$Title</span><span class="muted">$shownText</span></summary>
+  <div class="context-list">$(New-InspectorHtmlTable -Rows $displayRows -Columns $tableColumns -SuppressRowAnchors)</div>
+</details>
 "@
 }
 
@@ -272,35 +346,27 @@ function New-InspectorSummaryMetricsHtml {
     )
 
     $summary = Get-InspectorReportProperty -InputObject $ReportModel -Name 'Summary'
-    $runtimeTelemetry = Get-InspectorReportProperty -InputObject $ReportModel -Name 'RuntimeTelemetry'
-    $graphSummary = Get-InspectorReportProperty -InputObject $runtimeTelemetry -Name 'GraphRequestSummary'
-
     $highCount = @($ReportModel.AssessmentFindings | Where-Object { (Get-InspectorReportProperty -InputObject $_ -Name 'Severity') -eq 'High' }).Count
     $mediumCount = @($ReportModel.AssessmentFindings | Where-Object { (Get-InspectorReportProperty -InputObject $_ -Name 'Severity') -eq 'Medium' }).Count
+    $lowCount = @($ReportModel.AssessmentFindings | Where-Object { (Get-InspectorReportProperty -InputObject $_ -Name 'Severity') -eq 'Low' }).Count
+    $findingCount = @($ReportModel.AssessmentFindings | Where-Object { (ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $_ -Name 'Title')) -ne 'Tenant assessment observation summary' }).Count
     $objectCount = Get-InspectorReportMetricValue -InputObject $summary -Names @('ObjectInsightCount','ObjectsProcessed','TotalObjects')
-    $failedCount = Get-InspectorReportMetricValue -InputObject $summary -Names @('FailedCount')
-    $evidenceCount = Get-InspectorReportMetricValue -InputObject $summary -Names @('EvidenceRecordCount')
+    $failedCount = Get-InspectorReportMetricValue -InputObject $summary -Names @('FailedCount','FailedObjectCount')
 
     $metrics = @(
-        New-InspectorReportMetric -Label 'High findings' -Value $highCount -Hint 'Assessment findings marked High' -Status $(if ($highCount -gt 0) { 'High' } else { 'Success' })
-        New-InspectorReportMetric -Label 'Medium findings' -Value $mediumCount -Hint 'Assessment findings marked Medium' -Status $(if ($mediumCount -gt 0) { 'Medium' } else { 'Success' })
-        New-InspectorReportMetric -Label 'Failed objects' -Value $(if ($null -ne $failedCount) { $failedCount } else { 0 }) -Hint 'Objects that did not complete processing' -Status $(if ($null -ne $failedCount -and [int]$failedCount -gt 0) { 'High' } else { 'Success' })
-        New-InspectorReportMetric -Label 'Evidence records' -Value $(if ($null -ne $evidenceCount) { $evidenceCount } else { @($ReportModel.EvidenceRows).Count }) -Hint 'Collected evidence rows' -Status 'Info'
-        New-InspectorReportMetric -Label 'Objects inspected' -Value $(if ($null -ne $objectCount) { $objectCount } else { @($ReportModel.ObjectIndex).Count }) -Hint 'Normalized objects in scope' -Status 'Info'
+        New-InspectorReportMetric -Label 'High findings' -Value $highCount -Hint 'Review first' -Status $(if ($highCount -gt 0) { 'High' } else { 'Success' })
+        New-InspectorReportMetric -Label 'Medium findings' -Value $mediumCount -Hint 'Review after High' -Status $(if ($mediumCount -gt 0) { 'Medium' } else { 'Success' })
+        New-InspectorReportMetric -Label 'Low findings' -Value $lowCount -Hint 'Lower priority review' -Status $(if ($lowCount -gt 0) { 'Low' } else { 'Success' })
+        New-InspectorReportMetric -Label 'Grouped findings' -Value $findingCount -Hint 'Security issues after grouping' -Status 'Info'
+        New-InspectorReportMetric -Label 'Objects inspected' -Value $(if ($null -ne $objectCount) { $objectCount } else { @($ReportModel.ObjectIndex).Count }) -Hint 'Objects in assessment scope' -Status 'Info'
+        New-InspectorReportMetric -Label 'Failed objects' -Value $(if ($null -ne $failedCount) { $failedCount } else { 0 }) -Hint 'Incomplete processing' -Status $(if ($null -ne $failedCount -and [int]$failedCount -gt 0) { 'High' } else { 'Success' })
     )
-
-    if ($null -ne $runtimeTelemetry) {
-        $metrics += @(
-            New-InspectorReportMetric -Label 'Graph requests' -Value (Get-InspectorReportMetricValue -InputObject $graphSummary -Names @('TotalRequests','GraphRequestCount')) -Hint 'Captured during collection' -Status 'Default'
-            New-InspectorReportMetric -Label 'Runtime so far' -Value (ConvertTo-InspectorReportDuration (Get-InspectorReportProperty -InputObject (Get-InspectorReportProperty -InputObject $ReportModel -Name 'OrchestrationTelemetry') -Name 'TotalCommandDurationMs')) -Hint 'Runtime captured when the report was generated' -Status 'Default'
-        )
-    }
 
     return @"
 <section id="summary-metrics" class="section">
   <div class="section-header">
-    <h2>Summary Metrics</h2>
-    <span class="muted">$(@($metrics).Count) metrics</span>
+    <h2>At a glance</h2>
+    <span class="muted">Security assessment summary</span>
   </div>
   $(New-InspectorMetricCardsHtml -Metrics $metrics)
 </section>
@@ -316,166 +382,47 @@ function New-InspectorScopeInventoryHtml {
 
     $summary = Get-InspectorReportProperty -InputObject $ReportModel -Name 'Summary'
     $inventory = Get-InspectorReportProperty -InputObject $ReportModel -Name 'ScopeInventory'
-
-    if ($null -eq $inventory) {
-        $inventory = Get-InspectorReportProperty -InputObject $summary -Name 'ScopeInventory'
-    }
+    if ($null -eq $inventory) { $inventory = Get-InspectorReportProperty -InputObject $summary -Name 'ScopeInventory' }
 
     $microsoftPublishedCount = Get-InspectorReportMetricValue -InputObject $inventory -Names @('MicrosoftPublishedServicePrincipals')
     $classificationConfidence = ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $inventory -Name 'FirstPartyClassificationConfidence')
-    $microsoftPublishedValue =
-        if ($null -ne $microsoftPublishedCount -and $classificationConfidence -ne 'NotClassified') {
-            $microsoftPublishedCount
-        }
-        else {
-            'Not classified'
-        }
+    $microsoftPublishedValue = if ($null -ne $microsoftPublishedCount -and $classificationConfidence -ne 'NotClassified') { $microsoftPublishedCount } else { 'Not classified' }
 
     $rows = @(
         [PSCustomObject]@{ Metric = 'Users discovered'; Count = Get-InspectorReportMetricValue -InputObject $inventory -Names @('UsersDiscovered') }
         [PSCustomObject]@{ Metric = 'App registrations discovered'; Count = Get-InspectorReportMetricValue -InputObject $inventory -Names @('AppRegistrationsDiscovered') }
         [PSCustomObject]@{ Metric = 'Enterprise applications / service principals discovered'; Count = Get-InspectorReportMetricValue -InputObject $inventory -Names @('ServicePrincipalsDiscovered') }
-        [PSCustomObject]@{ Metric = 'Microsoft-published service principals (metadata-classified)'; Count = $microsoftPublishedValue }
+        [PSCustomObject]@{ Metric = 'Microsoft-published service principals'; Count = $microsoftPublishedValue }
         [PSCustomObject]@{ Metric = 'Groups discovered'; Count = Get-InspectorReportMetricValue -InputObject $inventory -Names @('GroupsDiscovered') }
         [PSCustomObject]@{ Metric = 'OAuth2 permission grants discovered'; Count = Get-InspectorReportMetricValue -InputObject $inventory -Names @('OAuth2PermissionGrantsDiscovered') }
-        [PSCustomObject]@{ Metric = 'Subscribed SKUs discovered (license inventory)'; Count = Get-InspectorReportMetricValue -InputObject $inventory -Names @('SubscribedSkusDiscovered') }
-        [PSCustomObject]@{ Metric = 'License inventory status'; Count = Get-InspectorReportMetricValue -InputObject $inventory -Names @('LicenseInventoryStatus') }
-        [PSCustomObject]@{ Metric = 'PIM license capability'; Count = Get-InspectorReportMetricValue -InputObject $inventory -Names @('PimLicenseCapability') }
-        [PSCustomObject]@{ Metric = 'Identity Protection license capability'; Count = Get-InspectorReportMetricValue -InputObject $inventory -Names @('IdentityProtectionLicenseCapability') }
-        [PSCustomObject]@{ Metric = 'Directory role definitions discovered'; Count = Get-InspectorReportMetricValue -InputObject $inventory -Names @('DirectoryRoleDefinitionsDiscovered') }
         [PSCustomObject]@{ Metric = 'Directory role assignments discovered'; Count = Get-InspectorReportMetricValue -InputObject $inventory -Names @('DirectoryRoleAssignmentsDiscovered') }
-        [PSCustomObject]@{ Metric = 'PIM active role states discovered'; Count = Get-InspectorReportMetricValue -InputObject $inventory -Names @('RoleAssignmentScheduleInstancesDiscovered') }
-        [PSCustomObject]@{ Metric = 'PIM eligible role states discovered'; Count = Get-InspectorReportMetricValue -InputObject $inventory -Names @('RoleEligibilityScheduleInstancesDiscovered') }
+        [PSCustomObject]@{ Metric = 'Active role schedule instances collected'; Count = Get-InspectorReportMetricValue -InputObject $inventory -Names @('RoleAssignmentScheduleInstancesDiscovered') }
+        [PSCustomObject]@{ Metric = 'Eligible role schedule instances collected'; Count = Get-InspectorReportMetricValue -InputObject $inventory -Names @('RoleEligibilityScheduleInstancesDiscovered') }
         [PSCustomObject]@{ Metric = 'Administrative units discovered'; Count = Get-InspectorReportMetricValue -InputObject $inventory -Names @('AdministrativeUnitsDiscovered') }
-        [PSCustomObject]@{ Metric = 'Administrative unit members discovered'; Count = Get-InspectorReportMetricValue -InputObject $inventory -Names @('AdministrativeUnitMembersDiscovered') }
         [PSCustomObject]@{ Metric = 'Risky users discovered'; Count = Get-InspectorReportMetricValue -InputObject $inventory -Names @('RiskyUsersDiscovered') }
         [PSCustomObject]@{ Metric = 'Evidence records collected'; Count = Get-InspectorReportMetricValue -InputObject $inventory -Names @('EvidenceRecordsCollected') }
         [PSCustomObject]@{ Metric = 'Failed objects'; Count = Get-InspectorReportMetricValue -InputObject $inventory -Names @('FailedObjects') }
     )
 
-    return @"
-<section id="assessment-scope-inventory" class="section">
-  <div class="section-header"><h2>Assessment Scope Inventory</h2><span class="muted">Collected snapshot scope</span></div>
-  $(New-InspectorHtmlTable -Rows $rows -Columns @('Metric','Count'))
-</section>
+    $evidenceFileName = ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $ReportModel -Name 'EvidenceReportFileName')
+    $diagnosticsFileName = ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $ReportModel -Name 'DiagnosticsReportFileName')
+    $links = @()
+    if (-not [string]::IsNullOrWhiteSpace($evidenceFileName)) { $links += '<a class="nav-button" href="' + (ConvertTo-InspectorHtmlEncodedText $evidenceFileName) + '">Open evidence report</a>' }
+    if (-not [string]::IsNullOrWhiteSpace($diagnosticsFileName)) { $links += '<a class="nav-button" href="' + (ConvertTo-InspectorHtmlEncodedText $diagnosticsFileName) + '">Open diagnostics report</a>' }
+
+    $content = @"
+<p class="muted">Collection counts and package detail are kept here so the main assessment stays focused on findings.</p>
+<div class="technical-links">$($links -join [Environment]::NewLine)</div>
+<h3>Assessment scope inventory</h3>
+$(New-InspectorHtmlTable -Rows $rows -Columns @('Metric','Count'))
 "@
-}
 
-function New-InspectorTenantCapabilitiesHtml {
-    [CmdletBinding()]
-    param (
-        [Parameter(Mandatory)]
-        [object]$ReportModel
-    )
-
-    # Reporting consumes only the already-normalized scope inventory. This
-    # keeps report generation fully offline and avoids coupling HTML rendering
-    # to Graph objects or SKU parsing logic.
-    $summary = Get-InspectorReportProperty -InputObject $ReportModel -Name 'Summary'
-    $inventory = Get-InspectorReportProperty -InputObject $ReportModel -Name 'ScopeInventory'
-    if ($null -eq $inventory) {
-        $inventory = Get-InspectorReportProperty -InputObject $summary -Name 'ScopeInventory'
-    }
-
-    $licenseInventoryStatus = ConvertTo-InspectorReportString (
-        Get-InspectorReportMetricValue -InputObject $inventory -Names @('LicenseInventoryStatus')
-    )
-    $licenseValidationStatus = ConvertTo-InspectorReportString (
-        Get-InspectorReportMetricValue -InputObject $inventory -Names @('LicenseValidationStatus')
-    )
-    $pimCapability = ConvertTo-InspectorReportString (
-        Get-InspectorReportMetricValue -InputObject $inventory -Names @('PimLicenseCapability')
-    )
-    $identityProtectionCapability = ConvertTo-InspectorReportString (
-        Get-InspectorReportMetricValue -InputObject $inventory -Names @('IdentityProtectionLicenseCapability')
-    )
-
-    # Older report models intentionally remain renderable. Missing license
-    # fields are represented as Not evaluated rather than causing StrictMode or
-    # command failures.
-    if ([string]::IsNullOrWhiteSpace($licenseInventoryStatus)) { $licenseInventoryStatus = 'Not evaluated' }
-    if ([string]::IsNullOrWhiteSpace($licenseValidationStatus)) { $licenseValidationStatus = 'Not evaluated' }
-    if ([string]::IsNullOrWhiteSpace($pimCapability)) { $pimCapability = 'Not evaluated' }
-    if ([string]::IsNullOrWhiteSpace($identityProtectionCapability)) { $identityProtectionCapability = 'Not evaluated' }
-
-    $rows = @(
-        [PSCustomObject]@{ Capability = 'Tenant license inventory'; Status = $licenseInventoryStatus; Meaning = 'Optional /subscribedSkus capability inventory used for prevalidation.' }
-        [PSCustomObject]@{ Capability = 'License validation'; Status = $licenseValidationStatus; Meaning = 'Overall capability-level entitlement signal; not per-user licensing compliance.' }
-        [PSCustomObject]@{ Capability = 'Privileged Identity Management'; Status = $pimCapability; Meaning = 'Requires a qualifying Microsoft Entra PIM entitlement; feature evidence remains authoritative when inventory is unknown.' }
-        [PSCustomObject]@{ Capability = 'Identity Protection risky users'; Status = $identityProtectionCapability; Meaning = 'Requires a qualifying Microsoft Entra Identity Protection entitlement; feature evidence remains authoritative when inventory is unknown.' }
-    )
-
-    return @"
-<section id="tenant-license-capabilities" class="section">
-  <div class="section-header"><h2>Tenant License Capabilities</h2><span class="muted">Capability-aware collection prevalidation</span></div>
-  <p class="muted">License validation is a tenant-level capability signal only. It does not validate seat assignment or Microsoft licensing compliance.</p>
-  $(New-InspectorHtmlTable -Rows $rows -Columns @('Capability','Status','Meaning'))
-</section>
-"@
-}
-
-function New-InspectorScopeStatementHtml {
-    [CmdletBinding()]
-    param ([Parameter(Mandatory)][object]$ReportModel)
-
-    return @"
-<section id="assessment-scope-statement" class="section">
-  <div class="section-header"><h2>Assessment Scope</h2><span class="muted">Deliberate v1 boundaries</span></div>
-  <div class="trust-grid">
-    <div class="trust-box"><strong>Included</strong><br><span class="muted">Users, groups, app registrations, service principals, OAuth2 consent grants, ownership, selected credentials, selected Microsoft Graph application permissions, directory role assignments, and selected object relationships.</span></div>
-    <div class="trust-box"><strong>Not assessed</strong><br><span class="muted">Conditional Access, MFA/authentication methods, PIM administration or history, sign-in activity, audit history, risk-detection event analytics, device trust, Microsoft 365 workloads, comprehensive compliance state, numerical risk scoring, and attack paths.</span></div>
-  </div>
-</section>
-"@
-}
-
-function New-InspectorAssessmentAccountingHtml {
-    [CmdletBinding()]
-    param ([Parameter(Mandatory)][object]$ReportModel)
-
-    $summary = Get-InspectorReportProperty -InputObject $ReportModel -Name 'Summary'
-    $raw = Get-InspectorReportMetricValue -InputObject $summary -Names @('RawObservationCount')
-    $deduped = Get-InspectorReportMetricValue -InputObject $summary -Names @('DeduplicatedObservationCount','ObservationCount')
-    $duplicate = Get-InspectorReportMetricValue -InputObject $summary -Names @('DuplicateObservationCount')
-    if ($null -eq $duplicate -and $null -ne $raw -and $null -ne $deduped) {
-        $duplicate = [math]::Max(0, [int]$raw - [int]$deduped)
-    }
-    $grouped = Get-InspectorReportMetricValue -InputObject $summary -Names @('GroupedFindingCount','FindingCount')
-
-    $metrics = @(
-        [PSCustomObject]@{ Label='Evidence records'; Value=(Get-InspectorReportMetricValue -InputObject $summary -Names @('EvidenceRecordCount')); Hint='Collected source query provenance' }
-        [PSCustomObject]@{ Label='Raw observations'; Value=$raw; Hint='Generated rule and state signals' }
-        [PSCustomObject]@{ Label='Deduplicated observations'; Value=$deduped; Hint='Semantic duplicates normalized' }
-        [PSCustomObject]@{ Label='Duplicate observations'; Value=$duplicate; Hint='Normalized, not lost' }
-        [PSCustomObject]@{ Label='Grouped findings'; Value=$grouped; Hint='Report-level finding families' }
-    )
-
-    return @"
-<section id="assessment-accounting" class="section">
-  <div class="section-header"><h2>Assessment Accounting</h2><span class="muted">Evidence -> observations -> grouped findings</span></div>
-  <p class="muted">Evidence records represent collected source queries. Observations represent derived facts or rule signals. Raw observations are emitted by object-level rule/state evaluation. Semantic duplicates are consolidated before assessment intelligence groups the remaining observations into finding families. Deduplication does not represent unexplained data loss.</p>
-  $(New-InspectorMetricCardsHtml -Metrics $metrics)
-</section>
-"@
-}
-
-function New-InspectorSeverityMethodologyHtml {
-    [CmdletBinding()]
-    param ([Parameter(Mandatory)][object]$ReportModel)
-
-    $posture = Get-InspectorReportProperty -InputObject $ReportModel -Name 'TenantPosture'
-    $reason = ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $posture -Name 'TenantPostureReason')
-    if ([string]::IsNullOrWhiteSpace($reason)) {
-        $reason = 'AttentionRequired means at least one confirmed high condition exists or meaningful confirmed/review-required grouped conditions require administrator action.'
-    }
-
-    return @"
-<section id="severity-methodology" class="section">
-  <div class="section-header"><h2>Severity Methodology</h2><span class="muted">No numerical score</span></div>
-  <p class="muted">Severity represents the potential security impact of the detected condition, not the number of observations. Confidence represents evidence quality and completeness. ResultState indicates whether the condition is Confirmed, ReviewRequired, MoreEvidenceNeeded, or Informational.</p>
-  <p class="muted">Tenant posture reason: $(ConvertTo-InspectorHtmlEncodedText $reason)</p>
-</section>
-"@
+    return New-InspectorReportSection `
+        -Id 'technical-appendix' `
+        -Title 'Technical appendix' `
+        -Summary 'Collection counts and supporting reports' `
+        -Content $content `
+        -Collapsed
 }
 
 function New-InspectorFindingEvidenceHtml {
@@ -858,39 +805,54 @@ function Get-InspectorPortalLink {
     [CmdletBinding()]
     param (
         [string]$ObjectType,
-
         [string]$ObjectId,
-
-        [string]$AppId = ''
+        [string]$AppId = '',
+        [string]$TenantId = ''
     )
 
     $encodedId = if (-not [string]::IsNullOrWhiteSpace($ObjectId)) { [System.Uri]::EscapeDataString($ObjectId) } else { '' }
+    $tenantBase = Get-InspectorTenantPortalBaseUrl -TenantId $TenantId
     $url = ''
 
     switch (Get-InspectorReportNormalizedObjectType $ObjectType) {
         'User' {
             if ([string]::IsNullOrWhiteSpace($ObjectId)) { return $null }
-            $url = "https://entra.microsoft.com/#view/Microsoft_AAD_UsersAndTenants/UserProfileMenuBlade/~/overview/userId/$encodedId"
+            $url = "$tenantBase/#view/Microsoft_AAD_UsersAndTenants/UserProfileMenuBlade/~/overview/userId/$encodedId"
+        }
+        'RiskyUser' {
+            if (-not [string]::IsNullOrWhiteSpace($ObjectId)) {
+                $url = "$tenantBase/#view/Microsoft_AAD_UsersAndTenants/UserProfileMenuBlade/~/overview/userId/$encodedId"
+            }
+            else {
+                $url = "$tenantBase/#view/Microsoft_AAD_IdentityProtection/RiskyUsers.ReactView"
+            }
         }
         'Group' {
             if ([string]::IsNullOrWhiteSpace($ObjectId)) { return $null }
-            $url = "https://entra.microsoft.com/#view/Microsoft_AAD_IAM/GroupDetailsMenuBlade/~/Overview/groupId/$encodedId"
+            $url = "$tenantBase/#view/Microsoft_AAD_IAM/GroupDetailsMenuBlade/~/Overview/groupId/$encodedId"
         }
         'Application' {
-            if ([string]::IsNullOrWhiteSpace($AppId)) {
-                return $null
-            }
-
+            if ([string]::IsNullOrWhiteSpace($AppId)) { return $null }
             $encodedAppId = [System.Uri]::EscapeDataString($AppId)
-            $url = "https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationMenuBlade/~/Overview/appId/$encodedAppId"
+            $url = "$tenantBase/#view/Microsoft_AAD_RegisteredApps/ApplicationMenuBlade/~/Overview/appId/$encodedAppId"
         }
         'ServicePrincipal' {
-            if ([string]::IsNullOrWhiteSpace($ObjectId) -or [string]::IsNullOrWhiteSpace($AppId)) {
-                return $null
-            }
-
+            if ([string]::IsNullOrWhiteSpace($ObjectId) -or [string]::IsNullOrWhiteSpace($AppId)) { return $null }
             $encodedAppId = [System.Uri]::EscapeDataString($AppId)
-            $url = "https://entra.microsoft.com/#view/Microsoft_AAD_IAM/ManagedAppMenuBlade/~/Overview/objectId/$encodedId/appId/$encodedAppId"
+            $url = "$tenantBase/#view/Microsoft_AAD_IAM/ManagedAppMenuBlade/~/Overview/objectId/$encodedId/appId/$encodedAppId"
+        }
+        'DirectoryRole' {
+            $url = "$tenantBase/#view/Microsoft_AAD_IAM/RolesManagementMenuBlade/~/AllRoles"
+        }
+        'PimRole' {
+            $url = "$tenantBase/#view/Microsoft_Azure_PIMCommon/ActivationMenuBlade/~/aadmigratedroles?"
+        }
+        'AdministrativeUnit' {
+            if ([string]::IsNullOrWhiteSpace($ObjectId)) { return $null }
+            # Microsoft documents Administrative Units under Entra ID > Roles & admins >
+            # Admin units but does not publish a stable object-specific deep-link contract.
+            # Use the tenant-scoped Entra landing page instead of guessing an internal blade.
+            $url = $tenantBase
         }
         default { return $null }
     }
@@ -902,94 +864,57 @@ function New-InspectorOpenEntraLinkHtml {
     [CmdletBinding()]
     param (
         [string]$ObjectType,
-
         [string]$ObjectId,
-
-        [string]$AppId = ''
+        [string]$AppId = '',
+        [string]$TenantId = '',
+        [string]$Label = 'Open in Entra'
     )
 
-    $url = Get-InspectorPortalLink -ObjectType $ObjectType -ObjectId $ObjectId -AppId $AppId
+    $url = Get-InspectorPortalLink -ObjectType $ObjectType -ObjectId $ObjectId -AppId $AppId -TenantId $TenantId
+    if ([string]::IsNullOrWhiteSpace($url)) { return '' }
 
-    if ([string]::IsNullOrWhiteSpace($url)) {
-        return ''
-    }
-
-    return "<a class=""open-btn"" href=""$(ConvertTo-InspectorHtmlEncodedText $url)"" target=""_blank"" rel=""noopener noreferrer"">Open in Portal</a>"
+    return "<a class=""open-btn"" href=""$(ConvertTo-InspectorHtmlEncodedText $url)"" target=""_blank"" rel=""noopener noreferrer"">$(ConvertTo-InspectorHtmlEncodedText $Label)</a>"
 }
 
 function New-InspectorAffectedObjectsHtml {
     [CmdletBinding()]
     param (
-        [object[]]$AffectedObjects = @()
+        [object[]]$AffectedObjects = @(),
+        [string]$TenantId = ''
     )
-
-    $objects =
-        @(
-            foreach ($item in @($AffectedObjects)) {
-                if ($item -is [array]) {
-                    foreach ($nested in @($item)) { $nested }
-                }
-                else {
-                    $item
-                }
-            }
-        ) |
-        Where-Object { $null -ne $_ } |
-        Select-Object -First 5
 
     $allObjects = @(
         foreach ($item in @($AffectedObjects)) {
-            if ($item -is [array]) {
-                foreach ($nested in @($item)) { $nested }
-            }
-            else {
-                $item
-            }
+            if ($item -is [array]) { foreach ($nested in @($item)) { $nested } }
+            else { $item }
         }
     ) | Where-Object { $null -ne $_ }
 
+    $objects = @($allObjects | Select-Object -First 8)
     $total = @($allObjects).Count
+    if ($total -eq 0) { return '<div class="affected-objects"><span class="muted">No affected object was attached to this finding.</span></div>' }
 
-    if ($total -eq 0) {
-        return '<div class="affected-objects"><span class="muted">Affected objects: 0</span></div>'
-    }
-
-    $rows =
-        @(
-            foreach ($object in $objects) {
-                $objectType = Get-InspectorReportNormalizedObjectType (Get-InspectorReportProperty -InputObject $object -Name 'ObjectType')
-                $objectId = ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $object -Name 'ObjectId')
-                $displayName = ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $object -Name 'DisplayName')
-                $appId = ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $object -Name 'AppId')
-                $upn = ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $object -Name 'UserPrincipalName')
-                $identifier = @($upn, $appId, $objectId) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 1
-
-                if ([string]::IsNullOrWhiteSpace($displayName) -or $displayName -eq $objectId) {
-                    $displayName = $identifier
-                }
-
-                if ([string]::IsNullOrWhiteSpace($displayName)) {
-                    $displayName = 'Not available'
-                }
-
-                $portalLink = New-InspectorOpenEntraLinkHtml -ObjectType $objectType -ObjectId $objectId -AppId $appId
-
-                "<tr><td>$(ConvertTo-InspectorHtmlEncodedText $displayName)</td><td>$(ConvertTo-InspectorHtmlEncodedText $objectType)</td><td>$(ConvertTo-InspectorHtmlEncodedText $identifier)</td><td>$portalLink</td></tr>"
-            }
-        ) -join [Environment]::NewLine
-
-    $more =
-        if ($total -gt @($objects).Count) {
-            "<p class=""muted"">Showing $(@($objects).Count) of $total affected objects.</p>"
+    $rows = @(
+        foreach ($object in $objects) {
+            $objectType = Get-InspectorReportNormalizedObjectType (Get-InspectorReportProperty -InputObject $object -Name 'ObjectType')
+            $objectId = ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $object -Name 'ObjectId')
+            $displayName = ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $object -Name 'DisplayName')
+            $appId = ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $object -Name 'AppId')
+            $upn = ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $object -Name 'UserPrincipalName')
+            $identifier = @($upn, $appId, $objectId) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 1
+            if ([string]::IsNullOrWhiteSpace($displayName) -or $displayName -eq $objectId) { $displayName = $identifier }
+            if ([string]::IsNullOrWhiteSpace($displayName)) { $displayName = 'Not available' }
+            $portalLink = New-InspectorOpenEntraLinkHtml -ObjectType $objectType -ObjectId $objectId -AppId $appId -TenantId $TenantId -Label 'Open object'
+            "<tr><td>$(ConvertTo-InspectorHtmlEncodedText $displayName)</td><td>$(ConvertTo-InspectorHtmlEncodedText $objectType)</td><td>$(ConvertTo-InspectorHtmlEncodedText $identifier)</td><td>$portalLink</td></tr>"
         }
-        else {
-            ''
-        }
+    ) -join [Environment]::NewLine
+
+    $more = if ($total -gt @($objects).Count) { "<p class=""muted"">Showing $(@($objects).Count) of $total affected objects. Use the evidence report for the full grouped-finding detail.</p>" } else { '' }
 
     return @"
 <div class="affected-objects">
-  <div class="muted">Affected objects: $total</div>
-  <div class="table-wrap"><table class="data-table"><thead><tr><th>Name</th><th>Type</th><th>Identifier</th><th></th></tr></thead><tbody>$rows</tbody></table></div>
+  <span class="muted">Affected objects ($total)</span>
+  <div class="table-wrap"><table class="data-table"><thead><tr><th>Name</th><th>Type</th><th>Identifier</th><th>Entra</th></tr></thead><tbody>$rows</tbody></table></div>
   $more
 </div>
 "@
@@ -999,7 +924,7 @@ function New-InspectorIssueGroupsHtml {
     [CmdletBinding()]
     param ([AllowNull()][object[]]$IssueGroups = @())
 
-    $groups = @($IssueGroups) | Where-Object { $null -ne $_ } | Select-Object -First 8
+    $groups = @($IssueGroups) | Where-Object { $null -ne $_ } | Select-Object -First 12
     if (@($groups).Count -eq 0) { return '' }
 
     $rows = @(
@@ -1013,19 +938,18 @@ function New-InspectorIssueGroupsHtml {
             [PSCustomObject][ordered]@{
                 Condition = ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $group -Name 'Condition')
                 Severity = ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $group -Name 'Severity')
-                Confidence = ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $group -Name 'Confidence')
-                Criterion = ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $group -Name 'Criterion')
                 AffectedObjects = ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $group -Name 'ObjectCount')
                 Observations = ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $group -Name 'ObservationCount')
-                Sample = @($samples) -join '; '
+                Example = @($samples) -join '; '
             }
         }
     )
 
     return @"
-<details class="evidence">
-  <summary>Conditions detected</summary>
-  $(New-InspectorHtmlTable -Rows $rows -Columns @('Condition','Severity','Confidence','Criterion','AffectedObjects','Observations','Sample') -SuppressRowAnchors)
+<details class="finding-technical">
+  <summary>Grouped conditions</summary>
+  <p class="muted">Repeated instances of the same security issue are grouped here instead of repeated as separate findings.</p>
+  $(New-InspectorHtmlTable -Rows $rows -Columns @('Condition','Severity','AffectedObjects','Observations','Example') -SuppressRowAnchors)
 </details>
 "@
 }
@@ -1037,26 +961,14 @@ function New-InspectorPriorityFindingsHtml {
         [object]$ReportModel
     )
 
-    $findings =
-        @($ReportModel.AssessmentFindings) |
-        Where-Object {
-            (ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $_ -Name 'Title')) -ne 'Tenant assessment observation summary'
-        } |
-        Sort-Object {
-            Get-InspectorReportSeverityOrder -Severity ([string](Get-InspectorReportProperty -InputObject $_ -Name 'Severity'))
-        }, Category, Title
+    $findings = @($ReportModel.AssessmentFindings) |
+        Where-Object { (ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $_ -Name 'Title')) -ne 'Tenant assessment observation summary' } |
+        Sort-Object { Get-InspectorReportSeverityOrder -Severity ([string](Get-InspectorReportProperty -InputObject $_ -Name 'Severity')) }, Category, Title
 
-    $observationIndex =
-        New-InspectorReportObservationIndex `
-            -SecurityObservations $ReportModel.SecurityObservations
-
-    $evidenceIndex =
-        New-InspectorReportEvidenceIndex `
-            -EvidenceRows $ReportModel.EvidenceRows
-
-    $recommendationTextByObservationId =
-        New-InspectorReportRecommendationTextIndex `
-            -AssessmentRecommendations $ReportModel.AssessmentRecommendations
+    $observationIndex = New-InspectorReportObservationIndex -SecurityObservations $ReportModel.SecurityObservations
+    $evidenceIndex = New-InspectorReportEvidenceIndex -EvidenceRows $ReportModel.EvidenceRows
+    $summary = Get-InspectorReportProperty -InputObject $ReportModel -Name 'Summary'
+    $tenantId = ConvertTo-InspectorReportString (Get-InspectorReportMetricValue -InputObject $summary -Names @('TenantId','TenantID'))
 
     $filters = @('All','High','Medium','Low','Informational')
     $filterHtml = @($filters | ForEach-Object {
@@ -1064,209 +976,128 @@ function New-InspectorPriorityFindingsHtml {
         "<button type=""button"" class=""filter-button$active"" data-filter-severity=""$_"">$(ConvertTo-InspectorHtmlEncodedText $_)</button>"
     }) -join [Environment]::NewLine
 
-    $categoryOptions =
-        @(
-            '<option value="">All categories</option>'
-            @(
-                $findings |
-                    ForEach-Object { Get-InspectorReportNormalizedCategory (Get-InspectorReportProperty -InputObject $_ -Name 'Category') } |
-                    Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
-                    Sort-Object -Unique |
-                    ForEach-Object { "<option value=""$(ConvertTo-InspectorHtmlEncodedText $_)"">$(ConvertTo-InspectorHtmlEncodedText $_)</option>" }
-            )
-        ) -join [Environment]::NewLine
-
-    $objectTypes =
-        @(
-            $findings |
-                ForEach-Object {
-                    @(Get-InspectorReportProperty -InputObject $_ -Name 'AffectedObjects') |
-                        ForEach-Object {
-                            Get-InspectorReportNormalizedObjectType (Get-InspectorReportProperty -InputObject $_ -Name 'ObjectType')
-                        }
-                } |
-                Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
-                Sort-Object -Unique
-        )
-
-    $objectTypeOptions =
-        @(
-            '<option value="">All object types</option>'
-            @($objectTypes | ForEach-Object { "<option value=""$(ConvertTo-InspectorHtmlEncodedText $_)"">$(ConvertTo-InspectorHtmlEncodedText $_)</option>" })
-        ) -join [Environment]::NewLine
+    $objectTypes = @(
+        $findings | ForEach-Object {
+            @(Get-InspectorReportProperty -InputObject $_ -Name 'AffectedObjects') | ForEach-Object {
+                Get-InspectorReportNormalizedObjectType (Get-InspectorReportProperty -InputObject $_ -Name 'ObjectType')
+            }
+        } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique
+    )
+    $objectTypeOptions = @(
+        '<option value="">All object types</option>'
+        @($objectTypes | ForEach-Object { "<option value=""$(ConvertTo-InspectorHtmlEncodedText $_)"">$(ConvertTo-InspectorHtmlEncodedText $_)</option>" })
+    ) -join [Environment]::NewLine
 
     if (@($findings).Count -eq 0) {
-        $cards = '<p class="empty-state">No assessment findings were supplied.</p>'
+        $cards = '<p class="empty-state">No actionable grouped findings were supplied.</p>'
     }
     else {
-        $cards =
-            @(
-                foreach ($finding in $findings) {
-                    $severity = ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $finding -Name 'Severity')
-                    $category = ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $finding -Name 'Category')
-                    $title = ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $finding -Name 'Title')
-                    $description = ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $finding -Name 'Conclusion')
-                    $recommendation = ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $finding -Name 'Recommendation')
-                    $observationIds = @(Get-InspectorReportProperty -InputObject $finding -Name 'ObservationIds')
-                    $evidenceIds = @(Get-InspectorReportProperty -InputObject $finding -Name 'EvidenceIds')
-                    $references = @(Get-InspectorReportProperty -InputObject $finding -Name 'References')
-                    $affectedObjects = @(Get-InspectorReportProperty -InputObject $finding -Name 'AffectedObjects')
-                    $resultState = ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $finding -Name 'ResultState')
-                    $evidenceLinkStatus = ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $finding -Name 'EvidenceLinkStatus')
-                    $evidenceSupportStatus = ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $finding -Name 'EvidenceSupportStatus')
-                    $criterionSummary = ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $finding -Name 'CriterionSummary')
-                    $severityReason = ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $finding -Name 'SeverityReason')
-                    $issueGroups = @(Get-InspectorReportProperty -InputObject $finding -Name 'IssueGroups')
+        $cards = @(
+            foreach ($finding in $findings) {
+                $severity = ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $finding -Name 'Severity')
+                $category = ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $finding -Name 'Category')
+                $title = ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $finding -Name 'Title')
+                $description = ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $finding -Name 'Conclusion')
+                $recommendation = ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $finding -Name 'Recommendation')
+                $observationIds = @(Get-InspectorReportProperty -InputObject $finding -Name 'ObservationIds')
+                $evidenceIds = @(Get-InspectorReportProperty -InputObject $finding -Name 'EvidenceIds')
+                $references = @(Get-InspectorReportProperty -InputObject $finding -Name 'References')
+                $affectedObjects = @(Get-InspectorReportProperty -InputObject $finding -Name 'AffectedObjects')
+                $resultState = ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $finding -Name 'ResultState')
+                $evidenceSupportStatus = ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $finding -Name 'EvidenceSupportStatus')
+                $criterionSummary = ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $finding -Name 'CriterionSummary')
+                $severityReason = ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $finding -Name 'SeverityReason')
+                $issueGroups = @(Get-InspectorReportProperty -InputObject $finding -Name 'IssueGroups')
 
-                    if (@($references).Count -eq 0) {
-                        $references = @(Resolve-InspectorRecommendationReferences -InputObject $finding)
-                    }
+                if (@($references).Count -eq 0) { $references = @(Resolve-InspectorRecommendationReferences -InputObject $finding) }
+                if ([string]::IsNullOrWhiteSpace($description)) { $description = 'The assessment detected this security condition in the collected tenant data.' }
+                if ([string]::IsNullOrWhiteSpace($criterionSummary)) { $criterionSummary = 'See the contributing observations and evidence for the exact trigger.' }
+                if ([string]::IsNullOrWhiteSpace($recommendation)) { $recommendation = 'Review the affected objects and supporting evidence.' }
 
-                    if ([string]::IsNullOrWhiteSpace($description)) {
-                        $description = 'No finding description was supplied.'
-                    }
+                $observation = Get-InspectorReportFindingObservation -ObservationIds $observationIds -ObservationIndex $observationIndex
+                $objectText = if ($null -ne $observation) { Get-InspectorReportObservationDisplayName -Observation $observation } else { 'Not available' }
+                $objectType = if ($null -ne $observation) { Get-InspectorReportNormalizedObjectType (Get-InspectorReportObservationObjectType -Observation $observation) } else { 'Not available' }
+                $affectedObjectId = Get-InspectorReportAffectedObjectValue -Observation $observation -Names @('ObjectId','Id')
+                $appId = Get-InspectorReportAffectedObjectValue -Observation $observation -Names @('AppId','ApplicationId','ClientId')
+                $upn = Get-InspectorReportAffectedObjectValue -Observation $observation -Names @('UserPrincipalName','UPN')
+                $primaryPortalLink = New-InspectorOpenEntraLinkHtml -ObjectType $objectType -ObjectId $affectedObjectId -AppId $appId -TenantId $tenantId -Label 'Open primary object'
 
-                    if ([string]::IsNullOrWhiteSpace($recommendation)) {
-                        $recommendation = 'No recommended action was supplied for this finding.'
-                    }
+                $permission = (@(
+                    Get-InspectorReportProperty -InputObject $finding -Name 'Permission'
+                    Get-InspectorReportProperty -InputObject $finding -Name 'PermissionName'
+                ) | ForEach-Object { ConvertTo-InspectorReportString $_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique) -join ' '
 
-                    $objectText = 'Not available'
-                    $objectType = 'Not available'
-                    $observation =
-                        Get-InspectorReportFindingObservation `
-                            -ObservationIds $observationIds `
-                            -ObservationIndex $observationIndex
+                $matchingEvidenceRows = Get-InspectorReportEvidenceRowsById -EvidenceIndex $evidenceIndex -EvidenceIds $evidenceIds
+                $evidenceSummary = @(
+                    @($matchingEvidenceRows) | ForEach-Object {
+                        @(Get-InspectorReportProperty -InputObject $_ -Name 'QueryName'; Get-InspectorReportProperty -InputObject $_ -Name 'RequiredPermission'; Get-InspectorReportProperty -InputObject $_ -Name 'Status')
+                    } | Select-Object -Unique | Select-Object -First 12
+                ) -join ' '
 
-                    if ($null -ne $observation) {
-                        $objectText = Get-InspectorReportObservationDisplayName -Observation $observation
-                        $objectType = Get-InspectorReportNormalizedObjectType (Get-InspectorReportObservationObjectType -Observation $observation)
-                    }
+                $metadataPills = @(
+                    New-InspectorReportMetadataPillHtml -Label 'Primary object' -Value $objectText
+                    New-InspectorReportMetadataPillHtml -Label 'Object ID' -Value $affectedObjectId
+                    New-InspectorReportMetadataPillHtml -Label 'Type' -Value $objectType
+                    New-InspectorReportMetadataPillHtml -Label 'AppId' -Value $appId
+                    New-InspectorReportMetadataPillHtml -Label 'UPN' -Value $upn
+                    New-InspectorReportMetadataPillHtml -Label 'Permission' -Value $permission
+                    New-InspectorReportMetadataPillHtml -Label 'Result state' -Value $resultState
+                    New-InspectorReportMetadataPillHtml -Label 'Evidence support' -Value $evidenceSupportStatus
+                    "<span class=""pill"">Observations: $(@($observationIds).Count)</span>"
+                    "<span class=""pill"">Evidence: $(@($evidenceIds).Count)</span>"
+                ) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }
 
-                    if ([string]::IsNullOrWhiteSpace($objectText)) { $objectText = 'Not available' }
-                    if ([string]::IsNullOrWhiteSpace($objectType)) { $objectType = 'Not available' }
+                $technicalDetails = @"
+<details class="finding-technical">
+  <summary>Technical details</summary>
+  <div class="finding-meta">$($metadataPills -join [Environment]::NewLine)</div>
+  <p class="muted" data-highlight-target><strong>Severity basis:</strong> $(ConvertTo-InspectorHtmlEncodedText $severityReason)</p>
+  $(New-InspectorIssueGroupsHtml -IssueGroups $issueGroups)
+  $(New-InspectorFindingEvidenceHtml -ObservationIds $observationIds -EvidenceIds $evidenceIds -EvidenceReportFileName (Get-InspectorReportProperty -InputObject $ReportModel -Name 'EvidenceReportFileName') -FindingId (ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $finding -Name 'FindingId')))
+</details>
+"@
 
-                    $affectedObjectId = Get-InspectorReportAffectedObjectValue -Observation $observation -Names @('ObjectId','Id')
-                    $appId = Get-InspectorReportAffectedObjectValue -Observation $observation -Names @('AppId','ApplicationId','ClientId')
-                    $upn = Get-InspectorReportAffectedObjectValue -Observation $observation -Names @('UserPrincipalName','UPN')
-                    $openEntraLink = New-InspectorOpenEntraLinkHtml -ObjectType $objectType -ObjectId $affectedObjectId -AppId $appId
-                    $matchingEvidenceRows =
-                        Get-InspectorReportEvidenceRowsById `
-                            -EvidenceIndex $evidenceIndex `
-                            -EvidenceIds $evidenceIds
-
-                    $permission = (@(
-                        Get-InspectorReportProperty -InputObject $finding -Name 'Permission'
-                        Get-InspectorReportProperty -InputObject $finding -Name 'PermissionName'
-                    ) | ForEach-Object { ConvertTo-InspectorReportString $_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique) -join ' '
-
-                    $evidenceSummary =
-                        @(
-                            @($matchingEvidenceRows) |
-                                ForEach-Object {
-                                    @(
-                                        Get-InspectorReportProperty -InputObject $_ -Name 'QueryName'
-                                        Get-InspectorReportProperty -InputObject $_ -Name 'RequiredPermission'
-                                        Get-InspectorReportProperty -InputObject $_ -Name 'Status'
-                                    )
-                                } |
-                                Select-Object -Unique |
-                                Select-Object -First 12
-                        ) -join ' '
-
-                    $metadataPills =
-                        @(
-                            New-InspectorReportMetadataPillHtml -Label 'Object' -Value $objectText
-                            New-InspectorReportMetadataPillHtml -Label 'Object ID' -Value $affectedObjectId
-                            New-InspectorReportMetadataPillHtml -Label 'Type' -Value $objectType
-                            New-InspectorReportMetadataPillHtml -Label 'AppId' -Value $appId
-                            New-InspectorReportMetadataPillHtml -Label 'UPN' -Value $upn
-                            New-InspectorReportMetadataPillHtml -Label 'Permission' -Value $permission
-                            New-InspectorReportMetadataPillHtml -Label 'Result state' -Value $resultState
-                            New-InspectorReportMetadataPillHtml -Label 'Evidence support' -Value $evidenceSupportStatus
-                            New-InspectorReportMetadataPillHtml -Label 'Direct' -Value (Get-InspectorReportProperty -InputObject $finding -Name 'DirectEvidenceObservationCount')
-                            New-InspectorReportMetadataPillHtml -Label 'Derived' -Value (Get-InspectorReportProperty -InputObject $finding -Name 'DerivedEvidenceObservationCount')
-                            New-InspectorReportMetadataPillHtml -Label 'Unsupported' -Value (Get-InspectorReportProperty -InputObject $finding -Name 'UnsupportedObservationCount')
-                            "<span class=""pill"">Observations: $(@($observationIds).Count)</span>"
-                            "<span class=""pill"">Evidence: $(@($evidenceIds).Count)</span>"
-                            $openEntraLink
-                        ) |
-                        Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }
-
-                    $recommendationHtml = "<div class=""finding-action"" data-highlight-target><strong>Recommendation:</strong> $(ConvertTo-InspectorHtmlEncodedText $recommendation)$(New-InspectorOfficialReferencesHtml -References $references)</div>"
-
-                    $searchText =
-                        ConvertTo-InspectorReportSearchAttribute `
-                            -Values @(
-                                $title
-                                $description
-                                $severity
-                                $category
-                                (Get-InspectorReportNormalizedCategory $category)
-                                $objectText
-                                $affectedObjectId
-                                $appId
-                                $upn
-                                $objectType
-                                $permission
-                                $evidenceSummary
-                                $resultState
-                                $evidenceLinkStatus
-                                $evidenceSupportStatus
-                                $criterionSummary
-                                $severityReason
-                            ) |
-                            ForEach-Object {
-                                if ($_.Length -gt 8192) {
-                                    $_.Substring(0, 8192)
-                                }
-                                else {
-                                    $_
-                                }
-                            }
+                $searchText = ConvertTo-InspectorReportSearchAttribute -Values @(
+                    $title,$description,$severity,$category,(Get-InspectorReportNormalizedCategory $category),$objectText,$affectedObjectId,$appId,$upn,$objectType,$permission,$evidenceSummary,$resultState,$evidenceSupportStatus,$criterionSummary,$severityReason
+                )
+                if ($searchText.Length -gt 8192) { $searchText = $searchText.Substring(0,8192) }
 
 @"
-<article class="finding-card" data-severity="$(ConvertTo-InspectorHtmlEncodedText $severity)" data-category="$(ConvertTo-InspectorHtmlEncodedText (Get-InspectorReportNormalizedCategory $category))" data-object-type="$(ConvertTo-InspectorHtmlEncodedText $objectType)" data-object-types="$(ConvertTo-InspectorHtmlEncodedText ((@($affectedObjects) | ForEach-Object { Get-InspectorReportNormalizedObjectType (Get-InspectorReportProperty -InputObject $_ -Name 'ObjectType') } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique) -join ' '))" data-object-id="$(ConvertTo-InspectorHtmlEncodedText $affectedObjectId)" data-app-id="$(ConvertTo-InspectorHtmlEncodedText $appId)" data-upn="$(ConvertTo-InspectorHtmlEncodedText $upn)" data-display-name="$(ConvertTo-InspectorHtmlEncodedText $objectText)" data-permission="$(ConvertTo-InspectorHtmlEncodedText $permission)" data-search="$searchText">
+<article class="finding-card" data-severity="$(ConvertTo-InspectorHtmlEncodedText $severity)" data-category="$(ConvertTo-InspectorHtmlEncodedText (Get-InspectorReportNormalizedCategory $category))" data-object-type="$(ConvertTo-InspectorHtmlEncodedText $objectType)" data-object-types="$(ConvertTo-InspectorHtmlEncodedText ((@($affectedObjects) | ForEach-Object { Get-InspectorReportNormalizedObjectType (Get-InspectorReportProperty -InputObject $_ -Name 'ObjectType') } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique) -join ' '))" data-object-id="$(ConvertTo-InspectorHtmlEncodedText $affectedObjectId)" data-app-id="$(ConvertTo-InspectorHtmlEncodedText $appId)" data-upn="$(ConvertTo-InspectorHtmlEncodedText $upn)" data-display-name="$(ConvertTo-InspectorHtmlEncodedText $objectText)" data-search="$searchText">
   <div class="finding-top">
-    <span class="pill $(Get-InspectorReportStatusClass -Value $severity)">Severity: $(ConvertTo-InspectorHtmlEncodedText $severity)</span>
-    <span class="muted">$(ConvertTo-InspectorHtmlEncodedText $category)</span>
+    <span class="pill $(Get-InspectorReportStatusClass -Value $severity)">$(ConvertTo-InspectorHtmlEncodedText $severity)</span>
+    <span class="finding-category">$(ConvertTo-InspectorHtmlEncodedText $category)</span>
+    $primaryPortalLink
   </div>
-  <div class="finding-title" data-highlight-target>$(ConvertTo-InspectorHtmlEncodedText $title)</div>
-  <p class="muted" data-highlight-target>$(ConvertTo-InspectorHtmlEncodedText $description)</p>
-  <p class="muted" data-highlight-target><strong>Criterion:</strong> $(ConvertTo-InspectorHtmlEncodedText $criterionSummary)</p>
-  <p class="muted" data-highlight-target><strong>Severity reason:</strong> $(ConvertTo-InspectorHtmlEncodedText $severityReason)</p>
-  <div class="finding-meta">
-    $($metadataPills -join [Environment]::NewLine)
+  <h3 class="finding-title" data-highlight-target>$(ConvertTo-InspectorHtmlEncodedText $title)</h3>
+  <div class="finding-summary-grid">
+    <div class="finding-summary-item" data-highlight-target><span class="field-label">Why it matters</span><span class="field-value">$(ConvertTo-InspectorHtmlEncodedText $description)</span></div>
+    <div class="finding-summary-item" data-highlight-target><span class="field-label">What triggered it</span><span class="field-value">$(ConvertTo-InspectorHtmlEncodedText $criterionSummary)</span></div>
   </div>
-  $(New-InspectorAffectedObjectsHtml -AffectedObjects $affectedObjects)
-  $(New-InspectorIssueGroupsHtml -IssueGroups $issueGroups)
-  $recommendationHtml
-  $(New-InspectorFindingEvidenceHtml -ObservationIds $observationIds -EvidenceIds $evidenceIds -EvidenceReportFileName (Get-InspectorReportProperty -InputObject $ReportModel -Name 'EvidenceReportFileName') -FindingId (ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $finding -Name 'FindingId')))
+  $(New-InspectorAffectedObjectsHtml -AffectedObjects $affectedObjects -TenantId $tenantId)
+  <div class="finding-action" data-highlight-target><strong>Recommended action:</strong> $(ConvertTo-InspectorHtmlEncodedText $recommendation)$(New-InspectorOfficialReferencesHtml -References $references)</div>
+  $technicalDetails
 </article>
 "@
-                }
-            ) -join [Environment]::NewLine
+            }
+        ) -join [Environment]::NewLine
     }
 
     return @"
 <section id="priority-findings" class="section">
   <div class="section-header">
-    <h2>Grouped Findings</h2>
+    <h2>Findings</h2>
     <span id="findingResultCount" class="muted">$(@($findings).Count) of $(@($findings).Count) grouped findings</span>
   </div>
-  <div class="investigation-bar" aria-label="Finding investigation filters">
-    <input id="findingSearch" type="search" placeholder="Search object ID, appId/clientId, UPN, display name, permission, category, severity, or finding text" aria-label="Search grouped findings">
-    <select id="objectTypeFilter" aria-label="Filter findings by object type">
-      $objectTypeOptions
-    </select>
-    <button id="clearFindingFilters" type="button">Clear filters</button>
+  <p class="section-intro">Findings are grouped by security issue. Review High first, then open the affected Entra objects directly from each finding.</p>
+  <div class="investigation-bar" aria-label="Finding filters">
+    <input id="findingSearch" type="search" placeholder="Search finding, object, UPN, app ID, permission, or category" aria-label="Search findings">
+    <select id="objectTypeFilter" aria-label="Filter findings by object type">$objectTypeOptions</select>
+    <button id="clearFindingFilters" type="button">Clear</button>
   </div>
-  <div class="filter-row" aria-label="Finding severity filters">
-    $filterHtml
-  </div>
-  <p id="noFindingResults" class="empty-state" hidden>No grouped findings match the current filters.</p>
-  <div class="finding-list">
-    $cards
-  </div>
+  <div class="filter-row" aria-label="Finding severity filters">$filterHtml</div>
+  <p id="noFindingResults" class="empty-state" hidden>No findings match the current filters.</p>
+  <div class="finding-list">$cards</div>
 </section>
 "@
 }
@@ -1374,6 +1205,109 @@ function New-InspectorFindingsByCategoryHtml {
   </div>
 </section>
 "@
+}
+
+function New-InspectorPrivilegedIdentityContextHtml {
+    [CmdletBinding()]
+    param ([Parameter(Mandatory)][object]$ReportModel)
+
+    $details = Get-InspectorReportProperty -InputObject $ReportModel -Name 'InventoryDetails'
+    if ($null -eq $details) { return '' }
+
+    $riskyCount = @(Get-InspectorReportProperty -InputObject $details -Name 'RiskyUsers').Count
+    $privilegedGroupCount = @(Get-InspectorReportProperty -InputObject $details -Name 'PrivilegedGroups').Count
+    $directRoleCount = @(Get-InspectorReportProperty -InputObject $details -Name 'DirectoryRoleAssignments').Count
+    $pimActiveDisplayCount = @(Get-InspectorReportProperty -InputObject $details -Name 'PimActive').Count
+    $pimEligibleCount = @(Get-InspectorReportProperty -InputObject $details -Name 'PimEligible').Count
+    $auCount = @(Get-InspectorReportProperty -InputObject $details -Name 'AdministrativeUnits').Count
+    $scopeInventory = Get-InspectorReportProperty -InputObject $ReportModel -Name 'ScopeInventory'
+    if ($null -eq $scopeInventory) { $scopeInventory = Get-InspectorReportProperty -InputObject (Get-InspectorReportProperty -InputObject $ReportModel -Name 'Summary') -Name 'ScopeInventory' }
+    $pimActiveCollected = Get-InspectorReportMetricValue -InputObject $scopeInventory -Names @('RoleAssignmentScheduleInstancesDiscovered')
+    if ($null -eq $pimActiveCollected) { $pimActiveCollected = $pimActiveDisplayCount }
+
+    $cards = @(
+        [PSCustomObject]@{ Label='Risky users'; Value=$riskyCount; Hint='Identity Protection state collected'; Status=$(if ($riskyCount -gt 0) { 'Medium' } else { 'Success' }) }
+        [PSCustomObject]@{ Label='Privileged groups'; Value=$privilegedGroupCount; Hint='Role-assignable groups'; Status='Info' }
+        [PSCustomObject]@{ Label='Direct role assignments'; Value=$directRoleCount; Hint='Collected current assignments'; Status='Info' }
+        [PSCustomObject]@{ Label='Active role schedule instances collected'; Value=$pimActiveCollected; Hint='Raw current active-assignment schedule instances'; Status='Info' }
+        [PSCustomObject]@{ Label='Eligible role schedule instances'; Value=$pimEligibleCount; Hint='Eligible role state, not active privilege'; Status='Info' }
+        [PSCustomObject]@{ Label='Administrative units'; Value=$auCount; Hint='Delegated directory scope'; Status='Info' }
+    ) | ForEach-Object { New-InspectorReportMetric -Label $_.Label -Value $_.Value -Hint $_.Hint -Status $_.Status }
+
+    $detailHtml = @(
+        New-InspectorInventoryDetailHtml -ReportModel $ReportModel -PropertyName 'RiskyUsers' -Title 'Risky users' -Columns @('DisplayName','UserPrincipalName','RiskLevel','RiskState','RiskDetail')
+        New-InspectorInventoryDetailHtml -ReportModel $ReportModel -PropertyName 'PrivilegedGroups' -Title 'Privileged groups' -Columns @('DisplayName','ObjectId') -MaximumRows 100
+        New-InspectorInventoryDetailHtml -ReportModel $ReportModel -PropertyName 'DirectoryRoleAssignments' -Title 'Directory role assignments' -Columns @('Principal','PrincipalType','Role','Scope','AssignmentId') -MaximumRows 150
+        New-InspectorInventoryDetailHtml -ReportModel $ReportModel -PropertyName 'PimActive' -Title 'Active role schedule instances (deduplicated view)' -Columns @('Principal','PrincipalType','Role','Scope','State','Start','End') -MaximumRows 150
+        New-InspectorInventoryDetailHtml -ReportModel $ReportModel -PropertyName 'PimEligible' -Title 'Eligible role schedule instances' -Columns @('Principal','PrincipalType','Role','Scope','Start','End') -MaximumRows 150
+        New-InspectorInventoryDetailHtml -ReportModel $ReportModel -PropertyName 'AdministrativeUnits' -Title 'Administrative units' -Columns @('DisplayName','Description','Visibility','RestrictedManagement') -MaximumRows 100
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+
+    return @"
+<section id="privileged-identity-context" class="section">
+  <div class="section-header"><h2>Privileged identity context</h2><span class="muted">Roles, PIM, risky users, groups, and Administrative Units</span></div>
+  <p class="section-intro">This is supporting tenant context. Security conclusions remain in the Findings section above.</p>
+  $(New-InspectorMetricCardsHtml -Metrics $cards)
+  <div class="context-panel context-list">$($detailHtml -join [Environment]::NewLine)</div>
+</section>
+"@
+}
+
+function New-InspectorApplicationIdentityContextHtml {
+    [CmdletBinding()]
+    param ([Parameter(Mandatory)][object]$ReportModel)
+
+    $details = Get-InspectorReportProperty -InputObject $ReportModel -Name 'InventoryDetails'
+    if ($null -eq $details) { return '' }
+    $applications = @(Get-InspectorReportProperty -InputObject $details -Name 'Applications')
+    $servicePrincipals = @(Get-InspectorReportProperty -InputObject $details -Name 'ServicePrincipals')
+    $applicationFindingCategories = @('Consent','Credentials','Permissions','ServicePrincipal')
+    $applicationFindings = @($ReportModel.AssessmentFindings | Where-Object {
+        $applicationFindingCategories -contains (Get-InspectorReportNormalizedCategory (Get-InspectorReportProperty -InputObject $_ -Name 'Category'))
+    })
+
+    if ($applications.Count -eq 0 -and $servicePrincipals.Count -eq 0 -and $applicationFindings.Count -eq 0) { return '' }
+
+    $cards = @(
+        New-InspectorReportMetric -Label 'App registrations' -Value $applications.Count -Hint 'Application objects collected' -Status 'Info'
+        New-InspectorReportMetric -Label 'Enterprise applications' -Value $servicePrincipals.Count -Hint 'Service principals collected' -Status 'Info'
+        New-InspectorReportMetric -Label 'Application / permission findings' -Value $applicationFindings.Count -Hint 'Grouped security issues in this area' -Status $(if (@($applicationFindings | Where-Object { (Get-InspectorReportProperty -InputObject $_ -Name 'Severity') -eq 'High' }).Count -gt 0) { 'High' } elseif ($applicationFindings.Count -gt 0) { 'Medium' } else { 'Success' })
+    )
+    $detailHtml = @(
+        New-InspectorInventoryDetailHtml -ReportModel $ReportModel -PropertyName 'Applications' -Title 'App registrations' -Columns @('DisplayName','AppId','ObjectId') -MaximumRows 150
+        New-InspectorInventoryDetailHtml -ReportModel $ReportModel -PropertyName 'ServicePrincipals' -Title 'Enterprise applications / service principals' -Columns @('DisplayName','AppId','ObjectId') -MaximumRows 150
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+
+    return @"
+<section id="application-identity-context" class="section">
+  <div class="section-header"><h2>Application and permission context</h2><span class="muted">Applications, enterprise applications, and related findings</span></div>
+  <p class="section-intro">Use this supporting inventory to identify the application identities referenced by permission, credential, consent, and ownership findings. Security conclusions remain in Findings.</p>
+  $(New-InspectorMetricCardsHtml -Metrics $cards)
+  <div class="context-panel context-list">$($detailHtml -join [Environment]::NewLine)</div>
+</section>
+"@
+}
+
+function New-InspectorAssessmentNotesHtml {
+    [CmdletBinding()]
+    param ([Parameter(Mandatory)][object]$ReportModel)
+
+    $items = @(
+        'This is a read-only assessment; the report does not modify Microsoft Entra ID.'
+        @($ReportModel.AssessmentLimitations)
+    ) | ForEach-Object {
+        if ($_ -is [array]) { $_ } else { ,$_ }
+    } | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
+
+    $list = @($items | ForEach-Object { "<li>$(ConvertTo-InspectorHtmlEncodedText $_)</li>" }) -join [Environment]::NewLine
+    $content = if (@($items).Count -gt 0) { "<ul class=""limitations"">$list</ul>" } else { '<p class="empty-state">No assessment limitations were supplied.</p>' }
+
+    return New-InspectorReportSection `
+        -Id 'assessment-notes' `
+        -Title 'Assessment notes and limitations' `
+        -Summary "$(@($items).Count) notes" `
+        -Content $content `
+        -Collapsed
 }
 
 function New-InspectorRuntimeTelemetryHtml {
@@ -1514,156 +1448,58 @@ function New-InspectorExecutiveSummaryHtml {
         [object]$ReportModel
     )
 
-    $summary =
-        Get-InspectorReportProperty `
-            -InputObject $ReportModel `
-            -Name 'Summary'
+    $posture = Get-InspectorReportProperty -InputObject $ReportModel -Name 'TenantPosture'
+    $postureLabel = ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $posture -Name 'Label')
+    $highestSeverity = ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $posture -Name 'HighestSeverity')
+    if ([string]::IsNullOrWhiteSpace($postureLabel)) { $postureLabel = 'Not available' }
+    if ([string]::IsNullOrWhiteSpace($highestSeverity)) { $highestSeverity = 'Not available' }
 
-    $posture =
-        Get-InspectorReportProperty `
-            -InputObject $ReportModel `
-            -Name 'TenantPosture'
+    $postureClass = switch ($highestSeverity) { 'High' { 'high' } 'Medium' { 'medium' } 'Low' { 'low' } default { '' } }
+    $highCount = @($ReportModel.AssessmentFindings | Where-Object { (Get-InspectorReportProperty -InputObject $_ -Name 'Severity') -eq 'High' }).Count
+    $mediumCount = @($ReportModel.AssessmentFindings | Where-Object { (Get-InspectorReportProperty -InputObject $_ -Name 'Severity') -eq 'Medium' }).Count
+    $findingCount = @($ReportModel.AssessmentFindings | Where-Object { (ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $_ -Name 'Title')) -ne 'Tenant assessment observation summary' }).Count
 
-    $postureLabel =
-        ConvertTo-InspectorReportString `
-            (Get-InspectorReportProperty -InputObject $posture -Name 'Label')
-
-    $postureClass =
-        Get-InspectorReportStatusClass `
-            -Value $postureLabel
-
-    if ([string]::IsNullOrWhiteSpace($postureLabel)) {
-        $postureLabel = 'Not available'
-    }
-
-    $highestSeverity =
-        ConvertTo-InspectorReportString `
-            (Get-InspectorReportProperty -InputObject $posture -Name 'HighestSeverity')
-
-    if ([string]::IsNullOrWhiteSpace($highestSeverity)) {
-        $highestSeverity =
-            ConvertTo-InspectorReportString `
-                (@($ReportModel.AssessmentFindings) |
-                    Sort-Object {
-                        Get-InspectorReportSeverityOrder -Severity ([string](Get-InspectorReportProperty -InputObject $_ -Name 'Severity'))
-                    } |
-                    Select-Object -First 1 |
-                    ForEach-Object { Get-InspectorReportProperty -InputObject $_ -Name 'Severity' })
-    }
-
-    if ([string]::IsNullOrWhiteSpace($highestSeverity)) {
-        $highestSeverity = 'Not available'
-    }
-
-    $objectsInspected = Get-InspectorReportProperty -InputObject $summary -Name 'ObjectInsightCount'
-    if ($null -eq $objectsInspected) {
-        $objectsInspected = @($ReportModel.ObjectIndex).Count
-    }
-
-    $findingCount = @($ReportModel.AssessmentFindings).Count
-    $mainCategories =
-        @(
-            @($ReportModel.AssessmentFindings) |
-                ForEach-Object { Get-InspectorReportNormalizedCategory (Get-InspectorReportProperty -InputObject $_ -Name 'Category') } |
-                Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
-                Where-Object { $_ -ne 'AssessmentOverview' } |
-                Group-Object |
-                Sort-Object @{ Expression = 'Count'; Descending = $true }, Name |
-                ForEach-Object { $_.Name } |
-                Select-Object -First 3
-        )
-
-    $failedCount = Get-InspectorReportMetricValue -InputObject $summary -Names @('FailedCount')
+    $failedCount = Get-InspectorReportMetricValue -InputObject (Get-InspectorReportProperty -InputObject $ReportModel -Name 'Summary') -Names @('FailedCount','FailedObjectCount')
     $failureText = ''
-
     if ($null -ne $failedCount -and [int]$failedCount -gt 0) {
-        $failureGroups =
-            @($ReportModel.FailedObjects) |
-            Group-Object ObjectType |
-            Sort-Object @{ Expression = 'Count'; Descending = $true }, Name |
-            Select-Object -First 3 |
-            ForEach-Object { "$($_.Name): $($_.Count)" }
-
-        $failureSummary =
-            if (@($failureGroups).Count -gt 0) {
-                @($failureGroups) -join ', '
-            }
-            else {
-                "$failedCount object(s)"
-            }
-
         $diagnosticsFileName = ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $ReportModel -Name 'DiagnosticsReportFileName')
-        $diagnosticsLink =
-            if ([string]::IsNullOrWhiteSpace($diagnosticsFileName)) {
-                'Review failed-object exports for details.'
-            }
-            else {
-                "<a href=""$(ConvertTo-InspectorHtmlEncodedText $diagnosticsFileName)"">Review diagnostics report</a> for details."
-            }
-
-        $failureText = "<p>Some objects did not complete processing: $(ConvertTo-InspectorHtmlEncodedText $failureSummary). $diagnosticsLink</p>"
+        $failureText = if ([string]::IsNullOrWhiteSpace($diagnosticsFileName)) {
+            "<p><strong>Collection warning:</strong> $failedCount object(s) did not complete processing. Review the failed-object exports.</p>"
+        } else {
+            "<p><strong>Collection warning:</strong> $failedCount object(s) did not complete processing. <a href=""$(ConvertTo-InspectorHtmlEncodedText $diagnosticsFileName)"">Review diagnostics report</a>.</p>"
+        }
     }
-
-    $categoryText =
-        if ($mainCategories.Count -gt 0) {
-            $mainCategories -join ', '
-        }
-        else {
-            'no finding categories'
-        }
-
-    $evidenceFileName = ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $ReportModel -Name 'EvidenceReportFileName')
-    $evidenceText =
-        if ([string]::IsNullOrWhiteSpace($evidenceFileName)) {
-            'Detailed proof is available in the structured evidence exports.'
-        }
-        else {
-            "Detailed proof is available in the <a href=""$(ConvertTo-InspectorHtmlEncodedText $evidenceFileName)"">evidence report</a>."
-        }
 
     $packageValidationStatus = ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $ReportModel -Name 'PackageValidationStatus')
     $validationText = ''
     if (-not [string]::IsNullOrWhiteSpace($packageValidationStatus) -and $packageValidationStatus -ne 'Success') {
         $diagnosticsFileName = ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $ReportModel -Name 'DiagnosticsReportFileName')
-        $diagnosticsLink =
-            if ([string]::IsNullOrWhiteSpace($diagnosticsFileName)) {
-                'Review diagnostics.'
-            }
-            else {
-                "<a href=""$(ConvertTo-InspectorHtmlEncodedText $diagnosticsFileName)"">Review Diagnostics</a>"
-            }
-
+        $diagnosticsLink = if ([string]::IsNullOrWhiteSpace($diagnosticsFileName)) { 'Review diagnostics before relying on the package.' } else { "<a href=""$(ConvertTo-InspectorHtmlEncodedText $diagnosticsFileName)"">Review diagnostics report</a> before relying on the package." }
         $validationText = @"
 <div class="posture-banner high">
-  <div>
-    <div class="posture-label">ASSESSMENT PACKAGE VALIDATION FAILED</div>
-    <div class="posture-text">This report package failed internal consistency validation. Do not rely on this assessment for remediation decisions until the validation errors are resolved. $diagnosticsLink</div>
-  </div>
-  <span class="pill high">Package validation: $(ConvertTo-InspectorHtmlEncodedText $packageValidationStatus)</span>
+  <div><div class="posture-label">Assessment package validation failed</div><div class="posture-text">Internal package consistency checks did not pass. $diagnosticsLink</div></div>
+  <span class="pill severity-high">$(ConvertTo-InspectorHtmlEncodedText $packageValidationStatus)</span>
 </div>
 "@
     }
 
-    $content = @"
-$validationText
-<div class="posture-banner $postureClass">
-  <div>
-    <div class="posture-label">$(ConvertTo-InspectorHtmlEncodedText $postureLabel)</div>
-    <div class="posture-text">Highest severity observed: $(ConvertTo-InspectorHtmlEncodedText $highestSeverity)</div>
-  </div>
-</div>
-<div class="narrative">
-  <p>The tenant posture is $(ConvertTo-InspectorHtmlEncodedText $postureLabel), with the highest meaningful severity reported as $(ConvertTo-InspectorHtmlEncodedText $highestSeverity).</p>
-  <p>The dominant review domains are $(ConvertTo-InspectorHtmlEncodedText $categoryText). Review the categorized findings and priority findings below.</p>
-  <p>$evidenceText</p>
-  $failureText
-</div>
-"@
+    $prioritySentence = if ($highCount -gt 0) {
+        "Start with the $highCount High finding(s), then review the $mediumCount Medium finding(s)."
+    } elseif ($mediumCount -gt 0) {
+        "No High findings were produced. Start with the $mediumCount Medium finding(s)."
+    } else {
+        'No High or Medium grouped findings were produced by the implemented rules.'
+    }
 
     return @"
 <section id="executive-summary" class="section always-open">
-  <h2>Executive Summary</h2>
-  $content
+  <h2>Assessment summary</h2>
+  $validationText
+  <div class="posture-banner $postureClass">
+    <div><div class="posture-label">Tenant posture: $(ConvertTo-InspectorHtmlEncodedText $postureLabel)</div><div class="posture-text">Highest finding severity: $(ConvertTo-InspectorHtmlEncodedText $highestSeverity)</div></div>
+    <span class="pill $(Get-InspectorReportStatusClass -Value $highestSeverity)">$findingCount grouped findings</span>
+  </div>
+  <div class="narrative"><p>$prioritySentence Each finding below explains the issue, the trigger, affected objects, recommended action, and supporting evidence.</p>$failureText</div>
 </section>
 "@
 }
@@ -2145,9 +1981,9 @@ function New-InspectorExportMetadataHtml {
         [PSCustomObject]@{ Field='SourceKind'; Value=$ReportModel.SourceKind }
         [PSCustomObject]@{ Field='SourcePath'; Value=$ReportModel.SourcePath }
         [PSCustomObject]@{ Field='ManifestSchemaVersion'; Value=(Get-InspectorReportProperty -InputObject $manifest -Name 'SchemaVersion') }
-        [PSCustomObject]@{ Field='GraphCallsIssued'; Value=$ReportModel.GraphCallsIssued }
-        [PSCustomObject]@{ Field='IntelligenceAdded'; Value=$ReportModel.IntelligenceAdded }
-        [PSCustomObject]@{ Field='NewObservationsAdded'; Value=$ReportModel.NewObservationsAdded }
+        [PSCustomObject]@{ Field='Graph calls issued by report'; Value=$ReportModel.GraphCallsIssued }
+        [PSCustomObject]@{ Field='Intelligence added by report'; Value=$ReportModel.IntelligenceAdded }
+        [PSCustomObject]@{ Field='Observations added by report'; Value=$ReportModel.NewObservationsAdded }
         [PSCustomObject]@{ Field='RiskScoreProduced'; Value=$ReportModel.RiskScoreProduced }
         [PSCustomObject]@{ Field='AttackPathsProduced'; Value=$ReportModel.AttackPathsProduced }
         [PSCustomObject]@{ Field='ClientSideInteractivity'; Value=$ReportModel.ClientSideInteractivity }
@@ -2199,4 +2035,3 @@ function New-InspectorLimitationsHtml {
         -Content "<ul class=""limitations"">$list</ul>" `
         -Collapsed
 }
-

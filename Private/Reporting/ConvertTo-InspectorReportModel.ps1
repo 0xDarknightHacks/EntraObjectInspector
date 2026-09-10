@@ -1012,20 +1012,11 @@ function Test-InspectorReportPackageConsistency {
         $requiredEvidenceComplete -and
         $evidencePlanMatches
 
-    $errorRows =
-        if ($errors.Count -gt 0) {
-            @($errors)
-        }
-        else {
-            @([PSCustomObject][ordered]@{ ErrorId = $null; Message = $null; AffectedInvariant = $null })
-        }
-    $warningRows =
-        if ($warnings.Count -gt 0) {
-            @($warnings)
-        }
-        else {
-            @([PSCustomObject][ordered]@{ WarningId = $null; Message = $null; AffectedInvariant = $null })
-        }
+    # Successful validation must expose true empty collections.  Placeholder
+    # rows make consumers interpret a successful package as if it contained one
+    # empty validation record and serialize to a misleading object instead of [].
+    $errorRows = @($errors | Where-Object { $null -ne $_ })
+    $warningRows = @($warnings | Where-Object { $null -ne $_ })
 
     return [PSCustomObject][ordered]@{
         Status = $packageStatus
@@ -1524,6 +1515,11 @@ function ConvertTo-InspectorReportModel {
             -InputObjects @($Summary, $Manifest, $InputObject) `
             -Names @('ScopeInventory')
 
+    $inventoryDetails = Get-InspectorReportProperty -InputObject $Summary -Name 'InventoryDetails'
+    if ($null -eq $inventoryDetails -and $null -ne $InputObject) {
+        $inventoryDetails = ConvertTo-InspectorInventoryDetails -TenantSnapshot (Get-InspectorReportProperty -InputObject $InputObject -Name 'TenantSnapshot')
+    }
+
     $tenantCapabilities =
         Get-InspectorReportFirstValue `
             -InputObjects @($Summary, $Manifest, $InputObject) `
@@ -1740,6 +1736,7 @@ function ConvertTo-InspectorReportModel {
         Manifest                      = $Manifest
         Summary                       = $Summary
         ScopeInventory                = $scopeInventory
+        InventoryDetails              = $inventoryDetails
         TenantCapabilities            = $tenantCapabilities
         AssessmentCoverage            = $assessmentCoverage
         AssessmentIntelligence        = $AssessmentIntelligence

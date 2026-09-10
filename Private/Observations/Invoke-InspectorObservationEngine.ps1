@@ -764,30 +764,69 @@ function Invoke-InspectorObservationEngine {
         }
     }
 
-    # Permissions.
-    $highImpactPermissionNames = @(
-        'Directory.ReadWrite.All',
-        'RoleManagement.ReadWrite.Directory',
-        'Policy.ReadWrite.ConditionalAccess',
-        'AppRoleAssignment.ReadWrite.All'
-    )
-
+    # Permissions. The local permission catalog is the single source of truth
+    # for impact classification so newly validated high-impact permissions are
+    # automatically observed without maintaining a second hard-coded list.
     foreach ($permissionInsight in $permissionInsights) {
-        $permissionName = [string]$permissionInsight.PermissionName
+        $permissionName = [string](Get-InspectorObservationProperty -InputObject $permissionInsight -Name 'PermissionName')
 
-        if ($permissionName -in $highImpactPermissionNames) {
+        # Preserve compatibility with older/synthetic PermissionInsight shapes
+        # that predate ResourceAppId/ResourceDisplayName/IsHighImpact. When a
+        # permission name resolves in the local Microsoft Graph catalog, use
+        # that catalog metadata as the authoritative fallback. No Graph call is
+        # made here.
+        $catalogEntry = $null
+        if (-not [string]::IsNullOrWhiteSpace($permissionName)) {
+            $catalogEntry = @(
+                Get-InspectorPermissionCatalog -PermissionName $permissionName |
+                Select-Object -First 1
+            ) | Select-Object -First 1
+        }
+
+        $resourceDisplayName = [string](Get-InspectorObservationProperty -InputObject $permissionInsight -Name 'ResourceDisplayName')
+        if ([string]::IsNullOrWhiteSpace($resourceDisplayName) -and $null -ne $catalogEntry) {
+            $resourceDisplayName = [string](Get-InspectorObservationProperty -InputObject $catalogEntry -Name 'ResourceDisplayName')
+        }
+
+        $resourceAppId = [string](Get-InspectorObservationProperty -InputObject $permissionInsight -Name 'ResourceAppId')
+        if ([string]::IsNullOrWhiteSpace($resourceAppId) -and $null -ne $catalogEntry) {
+            $resourceAppId = [string](Get-InspectorObservationProperty -InputObject $catalogEntry -Name 'ResourceAppId')
+        }
+
+        $impactLevel = [string](Get-InspectorObservationProperty -InputObject $permissionInsight -Name 'ImpactLevel')
+        if ([string]::IsNullOrWhiteSpace($impactLevel) -and $null -ne $catalogEntry) {
+            $impactLevel = [string](Get-InspectorObservationProperty -InputObject $catalogEntry -Name 'ImpactLevel')
+        }
+
+        $isHighImpactValue = Get-InspectorObservationProperty -InputObject $permissionInsight -Name 'IsHighImpact'
+        $catalogIsHighImpact = if ($null -ne $catalogEntry) { (Get-InspectorObservationProperty -InputObject $catalogEntry -Name 'IsHighImpact') -eq $true } else { $false }
+        $isHighImpact = ($isHighImpactValue -eq $true) -or ($impactLevel -eq 'High') -or $catalogIsHighImpact
+        $isMicrosoftGraph = $resourceDisplayName -eq 'Microsoft Graph' -or $resourceAppId -eq '00000003-0000-0000-c000-000000000000'
+
+        if ($isMicrosoftGraph -and $isHighImpact) {
+            $permissionConfidence = [string](Get-InspectorObservationProperty -InputObject $permissionInsight -Name 'Confidence')
+            if ($permissionConfidence -notin @('High', 'Medium', 'Low')) {
+                $permissionConfidence = 'Medium'
+            }
+            $administrativeImpact = [string](Get-InspectorObservationProperty -InputObject $permissionInsight -Name 'AdministrativeImpact')
+            if ([string]::IsNullOrWhiteSpace($administrativeImpact) -and $null -ne $catalogEntry) {
+                $administrativeImpact = [string](Get-InspectorObservationProperty -InputObject $catalogEntry -Name 'AdministrativeImpact')
+            }
+            if ([string]::IsNullOrWhiteSpace($administrativeImpact)) {
+                $administrativeImpact = 'This high-impact Microsoft Graph application permission can materially affect tenant security and should be reviewed.'
+            }
             $observations.Add(
                 (New-InspectorSecurityObservation `
                     -Category 'Permissions' `
                     -Title "High-impact permission: $permissionName" `
                     -Description "The object has Microsoft Graph application permission '$permissionName'." `
                     -Severity 'High' `
-                    -Confidence $permissionInsight.Confidence `
+                    -Confidence $permissionConfidence `
                     -AffectedObject (New-InspectorAffectedObjectFromSourceObject -SourceObject (Find-InspectorObservationSourceObject -ObjectType 'ServicePrincipal' -ObjectId ([string]$permissionInsight.SourceObjectId)) -FallbackObjectType 'ServicePrincipal' -FallbackObjectId ([string]$permissionInsight.SourceObjectId) -FallbackDisplayName ([string]$permissionInsight.SourceObjectId)) `
-                    -EvidenceIds @($permissionInsight.RelationshipEvidenceId) `
+                    -EvidenceIds @([string](Get-InspectorObservationProperty -InputObject $permissionInsight -Name 'RelationshipEvidenceId')) `
                     -MicrosoftReference $permissionReference `
-                    -WhyItMatters $permissionInsight.AdministrativeImpact `
-                    -Limitations @($permissionInsight.Limitations) `
+                    -WhyItMatters $administrativeImpact `
+                    -Limitations @((Get-InspectorObservationProperty -InputObject $permissionInsight -Name 'Limitations')) `
                     -Recommendation 'Validate that this permission is required and covered by ownership, credential hygiene, and consent review.' `
                     -SourceRuleIds @('PERM-GRAPH-HIGH-001') `
                     -Metadata @{
@@ -796,7 +835,7 @@ function Invoke-InspectorObservationEngine {
                         PermissionCategory = Get-InspectorObservationProperty -InputObject $permissionInsight -Name 'PermissionCategory'
                         ResourceApi = Get-InspectorObservationProperty -InputObject $permissionInsight -Name 'ResourceDisplayName'
                         ResourceAppId = Get-InspectorObservationProperty -InputObject $permissionInsight -Name 'ResourceAppId'
-                        ImpactLevel = Get-InspectorObservationProperty -InputObject $permissionInsight -Name 'ImpactLevel'
+                        ImpactLevel = $impactLevel
                         AppRoleId = Get-InspectorObservationProperty -InputObject $permissionInsight -Name 'AppRoleId'
                         EvaluationCriterion = 'Permission is present in the local high-impact Microsoft Graph application permission catalog.'
                     })
@@ -1158,6 +1197,7 @@ function Invoke-InspectorObservationEngine {
                         ScopeType = $scopeType
                         AdministrativeUnitId = [string](Get-InspectorObservationMetadataValue -InputObject $roleAssignment -Name 'AdministrativeUnitId')
                         AdministrativeUnitDisplayName = [string](Get-InspectorObservationMetadataValue -InputObject $roleAssignment -Name 'AdministrativeUnitDisplayName')
+                        AdministrativeUnitRestrictedManagement = Get-InspectorObservationMetadataValue -InputObject $roleAssignment -Name 'AdministrativeUnitRestrictedManagement'
                         RelationshipType = 'AssignedDirectoryRole'
                     })
             )
@@ -1208,6 +1248,8 @@ function Invoke-InspectorObservationEngine {
                         DirectoryScopeId = [string](Get-InspectorObservationMetadataValue -InputObject $pimRelationship -Name 'DirectoryScopeId')
                         ScopeType = $scopeType
                         AdministrativeUnitId = [string](Get-InspectorObservationMetadataValue -InputObject $pimRelationship -Name 'AdministrativeUnitId')
+                        AdministrativeUnitDisplayName = [string](Get-InspectorObservationMetadataValue -InputObject $pimRelationship -Name 'AdministrativeUnitDisplayName')
+                        AdministrativeUnitRestrictedManagement = Get-InspectorObservationMetadataValue -InputObject $pimRelationship -Name 'AdministrativeUnitRestrictedManagement'
                         ReconciliationLimitation = [string](Get-InspectorObservationMetadataValue -InputObject $pimRelationship -Name 'ReconciliationLimitation')
                         RelationshipType = $relationshipType
                     })
@@ -1249,9 +1291,17 @@ function Invoke-InspectorObservationEngine {
         $riskLevel = [string](Get-InspectorObservationProperty -InputObject $riskArtifact -Name 'RiskLevel')
         $riskState = [string](Get-InspectorObservationProperty -InputObject $riskArtifact -Name 'RiskState')
         $isCurrentActionableRiskState = $riskState -in @('atRisk', 'confirmedCompromised')
-        $activePrivilegedEvidence = @(
+
+        $activePrivilegedRelationships = @(
             @(Get-InspectorObservationIndexedRelationships -SourceObjectId $sourceObjectId -RelationshipType @('ActiveDirectoryRoleScheduleInstance')) +
-            @(Get-InspectorObservationIndexedRelationships -SourceObjectId $sourceObjectId -RelationshipType @('AssignedDirectoryRole')) |
+            @(Get-InspectorObservationIndexedRelationships -SourceObjectId $sourceObjectId -RelationshipType @('AssignedDirectoryRole'))
+        )
+        $eligiblePrivilegedRelationships = @(
+            Get-InspectorObservationIndexedRelationships -SourceObjectId $sourceObjectId -RelationshipType @('EligibleDirectoryRoleScheduleInstance')
+        )
+
+        $activePrivilegedEvidence = @(
+            $activePrivilegedRelationships |
                 ForEach-Object {
                     $relationshipEvidenceIds = @(
                         @(Get-InspectorObservationMetadataValue -InputObject $_ -Name 'EvidenceIds') |
@@ -1262,32 +1312,169 @@ function Invoke-InspectorObservationEngine {
                 Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } |
                 Select-Object -Unique
         )
+        $eligiblePrivilegedEvidence = @(
+            Get-InspectorObservationRelationshipEvidenceIds -Items $eligiblePrivilegedRelationships
+        )
+
         $hasActivePrivilege = $activePrivilegedEvidence.Count -gt 0
-        $isPrivilegedRiskFinding = $hasActivePrivilege -and $isCurrentActionableRiskState
+        $hasEligiblePrivilege = $eligiblePrivilegedEvidence.Count -gt 0
+        $isActivePrivilegedRiskFinding = $hasActivePrivilege -and $isCurrentActionableRiskState
+        $isEligiblePrivilegedRiskFinding = (-not $hasActivePrivilege) -and $hasEligiblePrivilege -and $isCurrentActionableRiskState
+
+        $activeScopeTypes = @(
+            $activePrivilegedRelationships |
+                ForEach-Object { [string](Get-InspectorObservationMetadataValue -InputObject $_ -Name 'ScopeType') } |
+                Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+                Select-Object -Unique
+        )
+        $eligibleScopeTypes = @(
+            $eligiblePrivilegedRelationships |
+                ForEach-Object { [string](Get-InspectorObservationMetadataValue -InputObject $_ -Name 'ScopeType') } |
+                Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+                Select-Object -Unique
+        )
+        $restrictedManagementPrivilege = @(
+            @($activePrivilegedRelationships + $eligiblePrivilegedRelationships) |
+                Where-Object { (Get-InspectorObservationMetadataValue -InputObject $_ -Name 'AdministrativeUnitRestrictedManagement') -eq $true }
+        ).Count -gt 0
+
+        $riskTitle =
+            if ($isActivePrivilegedRiskFinding) { 'Risky user has active privileged context' }
+            elseif ($isEligiblePrivilegedRiskFinding) { 'Risky user has eligible privileged context' }
+            else { 'Risky user context present' }
+
+        $riskSeverity =
+            if ($isActivePrivilegedRiskFinding -and $riskLevel -eq 'high') { 'High' }
+            elseif ($isActivePrivilegedRiskFinding) { 'Medium' }
+            elseif ($isEligiblePrivilegedRiskFinding) { 'Medium' }
+            else { 'Informational' }
+
+        $riskWhyItMatters =
+            if ($isActivePrivilegedRiskFinding) {
+                'Current unresolved user risk on a principal with active directory privilege is a material privileged-identity condition that warrants review.'
+            }
+            elseif ($isEligiblePrivilegedRiskFinding) {
+                'Current unresolved user risk on a principal that is eligible for directory privilege warrants review because eligible access can be activated subject to PIM controls.'
+            }
+            else {
+                'Risky-user state helps explain identity risk context without proving compromise by itself.'
+            }
+
+        $riskLimitations = @('Risky-user data is licensing and retention dependent, and does not by itself prove compromise.')
+        if ($isEligiblePrivilegedRiskFinding) {
+            $riskLimitations += 'Eligible PIM state is not active privilege; activation requirements such as approval, MFA, justification, and role settings are not inferred unless separately collected.'
+        }
+
         $observations.Add(
             (New-InspectorSecurityObservation `
                 -Category 'Users' `
-                -Title $(if ($isPrivilegedRiskFinding) { 'Risky user has active privileged context' } else { 'Risky user context present' }) `
+                -Title $riskTitle `
                 -Description "User '$($affectedObject.DisplayName)' has Microsoft Entra ID Protection risk state '$riskState' and risk level '$riskLevel'." `
-                -Severity $(if ($isPrivilegedRiskFinding -and $riskLevel -eq 'high') { 'High' } elseif ($isPrivilegedRiskFinding) { 'Medium' } else { 'Informational' }) `
+                -Severity $riskSeverity `
                 -Confidence 'Medium' `
                 -AffectedObject $affectedObject `
-                -EvidenceIds @(@([string](Get-InspectorObservationProperty -InputObject $riskArtifact -Name 'EvidenceId')) + $activePrivilegedEvidence) `
+                -EvidenceIds @(@([string](Get-InspectorObservationProperty -InputObject $riskArtifact -Name 'EvidenceId')) + $activePrivilegedEvidence + $eligiblePrivilegedEvidence) `
                 -MicrosoftReference $identityProtectionReference `
-                -WhyItMatters $(if ($hasActivePrivilege) { 'Current user risk on a principal with active directory privilege is a material privileged-identity context that warrants review.' } else { 'Risky-user state helps explain identity risk context without proving compromise by itself.' }) `
-                -Limitations @('Risky-user data is licensing and retention dependent, and does not by itself prove compromise.') `
-                -Recommendation 'Review the user risk state in Microsoft Entra ID Protection and validate whether privileged access remains appropriate.' `
+                -WhyItMatters $riskWhyItMatters `
+                -Limitations $riskLimitations `
+                -Recommendation 'Review the user risk state in Microsoft Entra ID Protection and validate whether active or eligible privileged access remains appropriate.' `
+                -SourceRuleIds @('RISK-PRIV-001') `
                 -Metadata @{
-                    SignalDisposition = $(if ($isPrivilegedRiskFinding) { 'Actionable' } else { 'Contextual' })
+                    SignalDisposition = $(if ($isActivePrivilegedRiskFinding -or $isEligiblePrivilegedRiskFinding) { 'Actionable' } else { 'Contextual' })
                     RiskLevel = $riskLevel
                     RiskState = $riskState
                     RiskDetail = [string](Get-InspectorObservationProperty -InputObject $riskArtifact -Name 'RiskDetail')
                     RiskLastUpdatedDateTime = Get-InspectorObservationProperty -InputObject $riskArtifact -Name 'RiskLastUpdatedDateTime'
                     HasActivePrivilegedContext = [bool]$hasActivePrivilege
+                    HasEligiblePrivilegedContext = [bool]$hasEligiblePrivilege
                     CurrentRiskStateActionable = [bool]$isCurrentActionableRiskState
+                    ActivePrivilegeScopeTypes = @($activeScopeTypes)
+                    EligiblePrivilegeScopeTypes = @($eligibleScopeTypes)
+                    RestrictedManagementAdministrativeUnitPrivilege = [bool]$restrictedManagementPrivilege
                     RelationshipType = 'RiskyUserContext'
                 })
         )
+    }
+
+    # Workload privilege concentration and restricted-management AU access.
+    foreach ($servicePrincipal in @($sourceObjects | Where-Object { $_.ObjectType -eq 'ServicePrincipal' })) {
+        $servicePrincipalId = [string](Get-InspectorObservationProperty -InputObject $servicePrincipal -Name 'ObjectId')
+        $affectedServicePrincipal = New-InspectorAffectedObjectFromSourceObject -SourceObject $servicePrincipal -FallbackObjectType 'ServicePrincipal' -FallbackObjectId $servicePrincipalId -FallbackDisplayName $servicePrincipalId
+        $servicePrincipalPermissions = @(
+            $permissionInsights |
+                Where-Object {
+                    [string](Get-InspectorObservationProperty -InputObject $_ -Name 'SourceObjectId') -eq $servicePrincipalId -and
+                    (Get-InspectorObservationProperty -InputObject $_ -Name 'IsHighImpact') -eq $true -and
+                    (
+                        [string](Get-InspectorObservationProperty -InputObject $_ -Name 'ResourceDisplayName') -eq 'Microsoft Graph' -or
+                        [string](Get-InspectorObservationProperty -InputObject $_ -Name 'ResourceAppId') -eq '00000003-0000-0000-c000-000000000000'
+                    )
+                }
+        )
+        $servicePrincipalRoles = @(
+            @(Get-InspectorObservationIndexedRelationships -SourceObjectId $servicePrincipalId -RelationshipType @('AssignedDirectoryRole')) +
+            @(Get-InspectorObservationIndexedRelationships -SourceObjectId $servicePrincipalId -RelationshipType @('ActiveDirectoryRoleScheduleInstance'))
+        )
+
+        if ($servicePrincipalPermissions.Count -gt 0 -and $servicePrincipalRoles.Count -gt 0) {
+            $observations.Add(
+                (New-InspectorSecurityObservation `
+                    -Category 'ServicePrincipal' `
+                    -Title 'Service principal combines high-impact Graph permission and directory role' `
+                    -Description "Service principal '$($affectedServicePrincipal.DisplayName)' has both high-impact Microsoft Graph application permission and active Microsoft Entra directory-role context." `
+                    -Severity 'High' `
+                    -Confidence 'High' `
+                    -AffectedObject $affectedServicePrincipal `
+                    -EvidenceIds @(
+                        @($servicePrincipalPermissions | ForEach-Object { Get-InspectorObservationProperty -InputObject $_ -Name 'RelationshipEvidenceId' }) +
+                        @(Get-InspectorObservationRelationshipEvidenceIds -Items $servicePrincipalRoles)
+                    ) `
+                    -MicrosoftReference $privilegedIdentityReference `
+                    -WhyItMatters 'A workload identity that combines high-impact app-only Graph authorization with an Entra directory role concentrates multiple administrative control paths in one principal.' `
+                    -Limitations @('This is a privilege-concentration observation based on collected authorization state, not proof of misuse or an executable attack path.') `
+                    -Recommendation 'Validate that both the application permissions and directory-role assignments are necessary for the same workload identity.' `
+                    -SourceRuleIds @('SP-PRIV-COMB-001') `
+                    -Metadata @{
+                        RelatedServicePrincipalId = $servicePrincipalId
+                        PermissionNames = @($servicePrincipalPermissions | ForEach-Object { [string](Get-InspectorObservationProperty -InputObject $_ -Name 'PermissionName') } | Select-Object -Unique)
+                        RoleDefinitionIds = @($servicePrincipalRoles | ForEach-Object { [string](Get-InspectorObservationMetadataValue -InputObject $_ -Name 'RoleDefinitionId') } | Select-Object -Unique)
+                        RoleDisplayNames = @($servicePrincipalRoles | ForEach-Object { [string](Get-InspectorObservationMetadataValue -InputObject $_ -Name 'RoleDisplayName') } | Select-Object -Unique)
+                        EvidenceSupportType = 'DerivedFromTenantCollection'
+                    })
+            )
+        }
+
+        foreach ($restrictedRole in @($servicePrincipalRoles | Where-Object {
+            [string](Get-InspectorObservationMetadataValue -InputObject $_ -Name 'ScopeType') -eq 'AdministrativeUnit' -and
+            (Get-InspectorObservationMetadataValue -InputObject $_ -Name 'AdministrativeUnitRestrictedManagement') -eq $true
+        })) {
+            $auId = [string](Get-InspectorObservationMetadataValue -InputObject $restrictedRole -Name 'AdministrativeUnitId')
+            $auName = [string](Get-InspectorObservationMetadataValue -InputObject $restrictedRole -Name 'AdministrativeUnitDisplayName')
+            $roleName = [string](Get-InspectorObservationMetadataValue -InputObject $restrictedRole -Name 'RoleDisplayName')
+            $observations.Add(
+                (New-InspectorSecurityObservation `
+                    -Category 'ServicePrincipal' `
+                    -Title 'Service principal has role over restricted management administrative unit' `
+                    -Description "Service principal '$($affectedServicePrincipal.DisplayName)' has directory role '$roleName' scoped to restricted management administrative unit '$auName'." `
+                    -Severity 'Medium' `
+                    -Confidence 'High' `
+                    -AffectedObject $affectedServicePrincipal `
+                    -EvidenceIds (Get-InspectorObservationRelationshipEvidenceIds -Items @($restrictedRole)) `
+                    -MicrosoftReference 'Microsoft Entra restricted management administrative units require applications to have an explicit Entra role at the restricted administrative-unit scope to modify protected objects.' `
+                    -WhyItMatters 'An application role assignment at restricted-management AU scope is a sensitive explicit authorization boundary because ordinary tenant roles and Graph application permissions do not modify those protected objects by default.' `
+                    -Recommendation 'Validate that the workload identity requires this role and that its owners, credentials, and other permissions are tightly governed.' `
+                    -SourceRuleIds @('SP-AU-PRIV-001') `
+                    -Metadata @{
+                        RelatedServicePrincipalId = $servicePrincipalId
+                        RoleDefinitionId = [string](Get-InspectorObservationMetadataValue -InputObject $restrictedRole -Name 'RoleDefinitionId')
+                        RoleDisplayName = $roleName
+                        AdministrativeUnitId = $auId
+                        AdministrativeUnitDisplayName = $auName
+                        AdministrativeUnitRestrictedManagement = $true
+                        ScopeType = 'AdministrativeUnit'
+                    })
+            )
+        }
     }
 
     # Users.
@@ -1426,6 +1613,21 @@ function Invoke-InspectorObservationEngine {
             Where-Object { $_.RelationshipType -eq 'AssignedDirectoryRole' }
         )
 
+        $activePimRoleRelationships = @(
+            $groupRelationships |
+            Where-Object { $_.RelationshipType -eq 'ActiveDirectoryRoleScheduleInstance' }
+        )
+
+        $eligiblePimRoleRelationships = @(
+            $groupRelationships |
+            Where-Object { $_.RelationshipType -eq 'EligibleDirectoryRoleScheduleInstance' }
+        )
+
+        $ownerRelationships = @(
+            $groupRelationships |
+            Where-Object { $_.RelationshipType -eq 'OwnedBy' }
+        )
+
         if ($isAssignableToRole -eq $true) {
             $observations.Add(
                 (New-InspectorSecurityObservation `
@@ -1464,36 +1666,88 @@ function Invoke-InspectorObservationEngine {
             }
         }
 
-        if ($roleRelationships.Count -gt 0 -and $memberRelationships.Count -gt 0) {
+        if ($ownerRelationships.Count -gt 0 -and ($isAssignableToRole -eq $true -or $roleRelationships.Count -gt 0 -or $activePimRoleRelationships.Count -gt 0 -or $eligiblePimRoleRelationships.Count -gt 0)) {
+            $observations.Add(
+                (New-InspectorSecurityObservation `
+                    -Category 'Groups' `
+                    -Title 'Privileged group has delegated owner control' `
+                    -Description "Privileged or role-assignable group '$displayName' has collected owner relationships." `
+                    -Severity 'Medium' `
+                    -Confidence 'High' `
+                    -AffectedObject $affectedGroup `
+                    -EvidenceIds (Get-InspectorObservationRelationshipEvidenceIds -Items @($ownerRelationships + $roleRelationships + $activePimRoleRelationships + $eligiblePimRoleRelationships)) `
+                    -MicrosoftReference $roleAssignableGroupReference `
+                    -WhyItMatters 'Microsoft Entra allows management of role-assignable groups to be delegated through group ownership, so owners are part of the privileged group control plane and should be reviewed.' `
+                    -Recommendation 'Validate every owner of privileged and role-assignable groups and keep ownership limited to accountable administrators.' `
+                    -SourceRuleIds @('GROUP-PRIV-OWNER-001') `
+                    -Metadata @{
+                        OwnerCount = $ownerRelationships.Count
+                        ActiveRoleRelationshipCount = @($roleRelationships + $activePimRoleRelationships).Count
+                        EligibleRoleRelationshipCount = $eligiblePimRoleRelationships.Count
+                        IsAssignableToRole = [bool]$isAssignableToRole
+                    })
+            )
+        }
+
+        $activeDirectoryRoleRelationships = @($roleRelationships + $activePimRoleRelationships)
+        if ($activeDirectoryRoleRelationships.Count -gt 0 -and $memberRelationships.Count -gt 0) {
             $observations.Add(
                 (New-InspectorSecurityObservation `
                     -Category 'Groups' `
                     -Title 'Privileged group has members' `
-                    -Description "Group '$displayName' has a directory role assignment and collected members." `
+                    -Description "Group '$displayName' has active directory-role context and collected members." `
                     -Severity 'High' `
                     -Confidence 'High' `
                     -AffectedObject $affectedGroup `
-                    -EvidenceIds (Get-InspectorObservationEvidenceIds -Items @($roleRelationships + $memberRelationships)) `
+                    -EvidenceIds (Get-InspectorObservationRelationshipEvidenceIds -Items @($activeDirectoryRoleRelationships + $memberRelationships)) `
                     -MicrosoftReference $roleAssignableGroupReference `
-                    -WhyItMatters 'Group members may receive administrative capabilities through group-based role assignment.' `
-                    -Recommendation 'Review group role assignments and membership.' `
+                    -WhyItMatters 'Microsoft Entra role assignments to groups are inherited by group members, so active group role state places collected members inside the privileged access boundary.' `
+                    -Recommendation 'Review active group role assignments, PIM state, and membership.' `
+                    -SourceRuleIds @('GROUP-PRIV-MEMBERS-001') `
                     -Metadata @{
                         MemberCount = $memberRelationships.Count
-                        DirectoryRoleRelationshipCount = $roleRelationships.Count
+                        DirectoryRoleRelationshipCount = $activeDirectoryRoleRelationships.Count
+                        ActivePimRoleRelationshipCount = $activePimRoleRelationships.Count
                         DirectoryRoleAssignments = @(
-                            $roleRelationships | ForEach-Object {
+                            $activeDirectoryRoleRelationships | ForEach-Object {
                                 $roleMetadata = Get-InspectorObservationProperty -InputObject $_ -Name 'Metadata'
                                 [PSCustomObject][ordered]@{
                                     AssignmentId = [string](Get-InspectorObservationProperty -InputObject $roleMetadata -Name 'AssignmentId')
+                                    ScheduleInstanceId = [string](Get-InspectorObservationProperty -InputObject $roleMetadata -Name 'ScheduleInstanceId')
                                     PrincipalId = [string](Get-InspectorObservationProperty -InputObject $roleMetadata -Name 'PrincipalId')
                                     RoleDefinitionId = [string](Get-InspectorObservationProperty -InputObject $roleMetadata -Name 'RoleDefinitionId')
                                     RoleDisplayName = [string](Get-InspectorObservationProperty -InputObject $roleMetadata -Name 'RoleDisplayName')
                                     DirectoryScopeId = [string](Get-InspectorObservationProperty -InputObject $roleMetadata -Name 'DirectoryScopeId')
+                                    AssignmentState = [string](Get-InspectorObservationProperty -InputObject $roleMetadata -Name 'AssignmentState')
                                     EvidenceId = [string](Get-InspectorObservationProperty -InputObject $_ -Name 'EvidenceId')
                                 }
                             }
                         )
-                        EvaluationCriterion = 'At least one AssignedDirectoryRole relationship exists for the group and the group has at least one collected member.'
+                        EvaluationCriterion = 'At least one active AssignedDirectoryRole or ActiveDirectoryRoleScheduleInstance relationship exists for the group and the group has at least one collected member.'
+                    })
+            )
+        }
+
+        if ($eligiblePimRoleRelationships.Count -gt 0 -and $memberRelationships.Count -gt 0 -and $activeDirectoryRoleRelationships.Count -eq 0) {
+            $observations.Add(
+                (New-InspectorSecurityObservation `
+                    -Category 'Groups' `
+                    -Title 'PIM-eligible privileged group has members' `
+                    -Description "Group '$displayName' is eligible for Microsoft Entra directory-role activation and has collected members." `
+                    -Severity 'Medium' `
+                    -Confidence 'High' `
+                    -AffectedObject $affectedGroup `
+                    -EvidenceIds (Get-InspectorObservationRelationshipEvidenceIds -Items @($eligiblePimRoleRelationships + $memberRelationships)) `
+                    -MicrosoftReference $roleAssignableGroupReference `
+                    -WhyItMatters 'When a group is PIM-eligible for a Microsoft Entra role, its members can be eligible to activate that role, so membership remains privileged governance context even before activation.' `
+                    -Limitations @('Eligible PIM state is not active privilege; approval, MFA, justification, duration, and other activation controls are not inferred unless separately collected.') `
+                    -Recommendation 'Validate group membership and PIM eligibility, and confirm appropriate activation controls are configured.' `
+                    -SourceRuleIds @('GROUP-PIM-MEMBERS-001') `
+                    -Metadata @{
+                        MemberCount = $memberRelationships.Count
+                        EligiblePimRoleRelationshipCount = $eligiblePimRoleRelationships.Count
+                        RoleDisplayNames = @($eligiblePimRoleRelationships | ForEach-Object { [string](Get-InspectorObservationMetadataValue -InputObject $_ -Name 'RoleDisplayName') } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
+                        PrivilegeState = 'Eligible'
                     })
             )
         }
@@ -1514,15 +1768,15 @@ function Invoke-InspectorObservationEngine {
                 (New-InspectorSecurityObservation `
                     -Category 'Groups' `
                     -Title 'Group is nested into privileged group' `
-                    -Description "Group '$displayName' is a member of a privileged or role-assignable group according to collected metadata." `
-                    -Severity 'High' `
+                    -Description "Group '$displayName' appears as a member of a privileged or role-assignable group according to collected metadata." `
+                    -Severity 'Medium' `
                     -Confidence 'Medium' `
                     -AffectedObject $affectedGroup `
                     -EvidenceIds (Get-InspectorObservationEvidenceIds -Items $nestedPrivilegedParents) `
                     -MicrosoftReference $roleAssignableGroupReference `
-                    -WhyItMatters 'Nested group relationships can indirectly extend privileged access.' `
-                    -Limitations @('This observation fires only when parent group privilege metadata is available.') `
-                    -Recommendation 'Review nested group paths that lead to role-assignable or role-assigned groups.' `
+                    -WhyItMatters 'Microsoft Entra does not support groups as members of role-assignable groups. If collected metadata indicates this condition, the configuration or evidence should be reviewed rather than treated as a valid privilege path.' `
+                    -Limitations @('This observation fires only when parent group privilege metadata is available and does not assert a supported nested privilege path.') `
+                    -Recommendation 'Review the parent-group state and evidence for stale, unexpected, or unsupported nesting.' `
                     -Metadata @{
                         NestedPrivilegedParentCount = $nestedPrivilegedParents.Count
                     })
@@ -1549,4 +1803,3 @@ function Invoke-InspectorObservationEngine {
         )
     }
 }
-

@@ -63,6 +63,19 @@ function ConvertTo-InspectorReportString {
     return [string]$Value
 }
 
+
+function Get-InspectorTenantPortalBaseUrl {
+    [CmdletBinding()]
+    param (
+        [string]$TenantId = ''
+    )
+
+    $baseUrl = 'https://entra.microsoft.com'
+    if ([string]::IsNullOrWhiteSpace($TenantId)) { return $baseUrl }
+
+    return "$baseUrl/$([System.Uri]::EscapeDataString($TenantId))"
+}
+
 function ConvertTo-InspectorHtmlEncodedText {
     [CmdletBinding()]
     param (

@@ -1,4 +1,4 @@
-function Invoke-EntraSecurityAssessment {
+function Invoke-InspectorSecurityAssessmentCore {
     <#
     .SYNOPSIS
         Runs the full Entra Object Inspector assessment workflow.
@@ -360,24 +360,14 @@ function Invoke-EntraSecurityAssessment {
             Write-InspectorDiagnosticEvent -RunLog $runLog -Stage 'Authentication' -EventName 'AuthenticationSkipped' -Message $(if($offlineAssessment){'Graph connection skipped because a portable snapshot was supplied.'}else{'Graph connection skipped; caller-owned session assumed.'})
         }
 
-        if ([string]::IsNullOrWhiteSpace($ReportPath)) {
-            $ReportPath =
-                Join-Path `
-                    -Path $OutputDirectory `
-                    -ChildPath 'entra-object-inspector-report.html'
-        }
-
-        $reportParent =
-            Split-Path `
-                -Path $ReportPath `
-                -Parent
-
-        if (-not [string]::IsNullOrWhiteSpace($reportParent)) {
-            New-Item `
-                -ItemType Directory `
-                -Path $reportParent `
-                -Force |
-                Out-Null
+        # An explicit report path is honored as supplied.  When omitted, defer
+        # choosing the path until the structured export directory exists so each
+        # assessment run keeps its HTML report and sidecars inside its own package.
+        if (-not [string]::IsNullOrWhiteSpace($ReportPath)) {
+            $reportParent = Split-Path -Path $ReportPath -Parent
+            if (-not [string]::IsNullOrWhiteSpace($reportParent)) {
+                New-Item -ItemType Directory -Path $reportParent -Force | Out-Null
+            }
         }
 
         $tenantParameters = @{
@@ -452,6 +442,15 @@ function Invoke-EntraSecurityAssessment {
         Update-InspectorTelemetryMemorySample -Telemetry $runtimeTelemetry
         Set-InspectorAssessmentStageStatus -Name $stage -Status $exportResult.Status
         Write-InspectorDiagnosticEvent -RunLog $runLog -Stage $stage -EventName 'ExportCompleted' -Message "Structured export completed with status '$($exportResult.Status)'."
+
+        if ([string]::IsNullOrWhiteSpace($ReportPath)) {
+            $ReportPath = Join-Path -Path $exportResult.ExportDirectory -ChildPath 'entra-object-inspector-report.html'
+        }
+
+        $reportParent = Split-Path -Path $ReportPath -Parent
+        if (-not [string]::IsNullOrWhiteSpace($reportParent)) {
+            New-Item -ItemType Directory -Path $reportParent -Force | Out-Null
+        }
 
         $stage = 'Report'
         Write-InspectorAssessmentStage -Step 6 -Name 'Generating HTML report'
@@ -659,26 +658,24 @@ function Invoke-EntraSecurityAssessment {
                 -Name 'ExternalEndpointSummary'
 
         $totalArtifactSizeBytes = 0
+        $exportDirectoryFullPath = ''
 
         if (
             -not [string]::IsNullOrWhiteSpace([string]$exportResult.ExportDirectory) -and
             (Test-Path -LiteralPath $exportResult.ExportDirectory)
         ) {
-            $totalArtifactSizeBytes += @(
+            $exportDirectoryFullPath = [System.IO.Path]::GetFullPath([string]$exportResult.ExportDirectory).TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+            $artifactSizeMeasurement = @(
                 Get-ChildItem `
                     -LiteralPath $exportResult.ExportDirectory `
                     -File `
                     -Recurse `
                     -ErrorAction SilentlyContinue |
                 Measure-Object -Property Length -Sum
-            )[0].Sum
-        }
-
-        if (
-            -not [string]::IsNullOrWhiteSpace([string]$reportResult.ReportPath) -and
-            (Test-Path -LiteralPath $reportResult.ReportPath)
-        ) {
-            $totalArtifactSizeBytes += (Get-Item -LiteralPath $reportResult.ReportPath).Length
+            ) | Select-Object -First 1
+            if ($null -ne $artifactSizeMeasurement) {
+                $totalArtifactSizeBytes += [long]$artifactSizeMeasurement.Sum
+            }
         }
 
         $diagnosticsReportPath =
@@ -691,12 +688,27 @@ function Invoke-EntraSecurityAssessment {
                 -InputObject $reportResult `
                 -Name 'EvidenceReportPath'
 
-        foreach ($sidecarPath in @($diagnosticsReportPath, $evidenceReportPath)) {
+        # Default reports now live inside the run-specific structured export
+        # directory.  Count report files separately only when an explicit path
+        # placed them outside that directory, avoiding double-counted telemetry.
+        foreach ($reportArtifactPath in @($reportResult.ReportPath, $diagnosticsReportPath, $evidenceReportPath)) {
             if (
-                -not [string]::IsNullOrWhiteSpace([string]$sidecarPath) -and
-                (Test-Path -LiteralPath $sidecarPath)
+                [string]::IsNullOrWhiteSpace([string]$reportArtifactPath) -or
+                -not (Test-Path -LiteralPath $reportArtifactPath -PathType Leaf)
             ) {
-                $totalArtifactSizeBytes += (Get-Item -LiteralPath $sidecarPath).Length
+                continue
+            }
+
+            $reportArtifactFullPath = [System.IO.Path]::GetFullPath([string]$reportArtifactPath)
+            $isInsideExportDirectory =
+                -not [string]::IsNullOrWhiteSpace($exportDirectoryFullPath) -and
+                $reportArtifactFullPath.StartsWith(
+                    $exportDirectoryFullPath + [System.IO.Path]::DirectorySeparatorChar,
+                    [System.StringComparison]::OrdinalIgnoreCase
+                )
+
+            if (-not $isInsideExportDirectory) {
+                $totalArtifactSizeBytes += (Get-Item -LiteralPath $reportArtifactPath).Length
             }
         }
 
@@ -758,13 +770,21 @@ function Invoke-EntraSecurityAssessment {
         $packageValidationErrors = @(
             Get-InspectorObjectInsightProperty `
                 -InputObject $reportResult `
-                -Name 'PackageValidationErrors'
+                -Name 'PackageValidationErrors' |
+            Where-Object {
+                $null -ne $_ -and
+                -not [string]::IsNullOrWhiteSpace([string](Get-InspectorObjectInsightProperty -InputObject $_ -Name 'ErrorId'))
+            }
         )
 
         $packageValidationWarnings = @(
             Get-InspectorObjectInsightProperty `
                 -InputObject $reportResult `
-                -Name 'PackageValidationWarnings'
+                -Name 'PackageValidationWarnings' |
+            Where-Object {
+                $null -ne $_ -and
+                -not [string]::IsNullOrWhiteSpace([string](Get-InspectorObjectInsightProperty -InputObject $_ -Name 'WarningId'))
+            }
         )
 
         $reportFailedObjectCount =
@@ -785,7 +805,7 @@ function Invoke-EntraSecurityAssessment {
 
         $result = [PSCustomObject][ordered]@{
             PSTypeName                       = 'EntraObjectInspector.SecurityAssessmentResult'
-            SchemaVersion                    = '1.0.0'
+            SchemaVersion                    = '1.1.0'
             Status                           = $reportResult.Status
             AssessmentName                   = $AssessmentName
             RunId                            = $runLog.RunId
@@ -820,9 +840,14 @@ function Invoke-EntraSecurityAssessment {
             GraphSessionDisconnectAttempted  = $graphSessionDisconnectAttempted
             KeepGraphSession                 = [bool]$KeepGraphSession
             ReportOpened                     = $reportOpened
-            GraphCallsIssued                 = $reportResult.GraphCallsIssued
-            IntelligenceAdded                = $reportResult.IntelligenceAdded
-            NewObservationsAdded             = $reportResult.NewObservationsAdded
+            # Top-level fields describe the complete assessment command.  The
+            # report-only no-side-effect contract is exposed separately below.
+            GraphCallsIssued                 = Get-InspectorObjectInsightProperty -InputObject $graphSummary -Name 'TotalRequests'
+            IntelligenceAdded                = $null -ne $intelligence
+            NewObservationsAdded             = @((Get-InspectorObjectInsightProperty -InputObject $tenantResult -Name 'SecurityObservations')).Count -gt 0
+            ReportGraphCallsIssued           = Get-InspectorObjectInsightProperty -InputObject $reportResult -Name 'GraphCallsIssued'
+            ReportIntelligenceAdded          = Get-InspectorObjectInsightProperty -InputObject $reportResult -Name 'IntelligenceAdded'
+            ReportNewObservationsAdded       = Get-InspectorObjectInsightProperty -InputObject $reportResult -Name 'NewObservationsAdded'
             RiskScoreProduced                = $reportResult.RiskScoreProduced
             AttackPathsProduced              = $reportResult.AttackPathsProduced
             ClientSideInteractivity          = $reportResult.ClientSideInteractivity
@@ -1159,6 +1184,7 @@ function Invoke-EntraSecurityAssessment {
                 $result.GraphCallsAfterSnapshot = Get-InspectorObjectInsightProperty -InputObject $tenantResult -Name 'GraphCallsAfterSnapshot'
             }
             $result.GraphRequestCount = Get-InspectorObjectInsightProperty -InputObject (Get-InspectorObjectInsightProperty -InputObject $runtimeTelemetry -Name 'GraphRequestSummary') -Name 'TotalRequests'
+            $result.GraphCallsIssued = $result.GraphRequestCount
         }
 
         if ($hadPreviousRuntimeTelemetry) { $script:InspectorCurrentRuntimeTelemetry = $previousRuntimeTelemetry } else { Remove-Variable -Name 'InspectorCurrentRuntimeTelemetry' -Scope Script -ErrorAction SilentlyContinue }
@@ -1173,4 +1199,228 @@ function Invoke-EntraSecurityAssessment {
         try { Write-InspectorAssessmentCompletion -AssessmentResult $result } catch { }
         return $result
     }
+}
+
+function Invoke-EntraSecurityAssessment {
+    <#
+    .SYNOPSIS
+        Runs a complete read-only Entra Object Inspector assessment.
+
+    .DESCRIPTION
+        Runs the normal Entra Object Inspector workflow with a compact command
+        surface. Use the default Live parameter set for tenant-wide or targeted
+        Microsoft Graph collection. Use -SnapshotPath for portable offline
+        re-analysis without authentication or Graph collection.
+
+        Advanced transport, checkpoint, logging, session, and report metadata
+        controls remain available through -AdvancedOptions so the common syntax
+        stays short. Run Get-Help Invoke-EntraSecurityAssessment -Examples for
+        copy/paste examples.
+
+    .PARAMETER AssessmentName
+        Friendly name used in exported assessment artifacts and reports.
+
+    .PARAMETER OutputDirectory
+        Parent directory for timestamped assessment export packages.
+
+    .PARAMETER SnapshotPath
+        Portable tenant snapshot to analyze offline. Supplying this parameter
+        selects PortableOffline mode and skips authentication and Graph collection.
+
+    .PARAMETER SaveSnapshotPath
+        Saves the snapshot collected during a live assessment for later offline use.
+
+    .PARAMETER Target
+        One or more explicit targets in Identity or ObjectType|Identity form.
+        This performs a targeted live assessment instead of tenant-wide collection.
+
+    .PARAMETER TargetFile
+        TXT or CSV target specification for a targeted live assessment.
+
+    .PARAMETER CompareToSnapshotPath
+        Previous portable snapshot used for deterministic drift comparison.
+
+    .PARAMETER RulePackPath
+        Constrained declarative JSON rule pack applied to normalized observations.
+
+    .PARAMETER BaselinePath
+        Assessment baseline used to mark accepted observations without deleting them.
+
+    .PARAMETER OpenReport
+        Opens the generated main HTML report after successful completion.
+
+    .PARAMETER PassThru
+        Includes the full tenant, intelligence, export, and report result objects in
+        the returned assessment result.
+
+    .PARAMETER AdvancedOptions
+        Optional hashtable for infrequently used operational controls. Supported
+        keys are ReportPath, ObjectType, MaxObjectsPerType, BatchSize,
+        ThrottleDelayMilliseconds, MaxRetryCount, CheckpointPath, Resume,
+        NoProgress, SkipConnect, KeepGraphSession, LogDirectory, NoDiagnosticLog,
+        ClientName, and ConsultantName. Values are validated by the internal
+        orchestration command before execution.
+
+    .EXAMPLE
+        Invoke-EntraSecurityAssessment -AssessmentName "Contoso Entra Assessment"
+
+        Runs a normal tenant-wide live assessment and writes a timestamped export
+        package under .\EntraObjectInspector-Exports.
+
+    .EXAMPLE
+        Invoke-EntraSecurityAssessment `
+            -AssessmentName "Contoso Live Assessment" `
+            -SaveSnapshotPath ".\snapshots\contoso.json"
+
+        Runs a live assessment and saves the collected portable snapshot for reuse.
+
+    .EXAMPLE
+        Invoke-EntraSecurityAssessment `
+            -AssessmentName "Contoso Offline Review" `
+            -SnapshotPath ".\snapshots\contoso.json"
+
+        Re-analyzes an existing snapshot completely offline with zero Graph requests.
+
+    .EXAMPLE
+        Invoke-EntraSecurityAssessment `
+            -AssessmentName "Targeted App Review" `
+            -Target "Application|<object-id>","ServicePrincipal|<object-id>"
+
+        Performs a targeted live assessment for the supplied objects.
+
+    .EXAMPLE
+        Invoke-EntraSecurityAssessment `
+            -AssessmentName "Snapshot Drift Review" `
+            -SnapshotPath ".\snapshots\current.json" `
+            -CompareToSnapshotPath ".\snapshots\previous.json"
+
+        Compares the current portable snapshot with an earlier snapshot while
+        remaining fully offline.
+
+    .EXAMPLE
+        Invoke-EntraSecurityAssessment `
+            -AssessmentName "Policy Review" `
+            -SnapshotPath ".\snapshots\current.json" `
+            -RulePackPath ".\policy\rules.json" `
+            -BaselinePath ".\policy\baseline.json"
+
+        Applies a rule pack and baseline to a portable snapshot offline.
+
+    .EXAMPLE
+        Invoke-EntraSecurityAssessment `
+            -AssessmentName "Consulting Assessment" `
+            -AdvancedOptions @{
+                ClientName = "Contoso"
+                ConsultantName = "Security Team"
+                BatchSize = 50
+            }
+
+        Uses optional advanced controls without expanding the normal command syntax.
+    #>
+
+    [CmdletBinding(DefaultParameterSetName = 'Live', PositionalBinding = $false)]
+    param (
+        [Parameter(ParameterSetName = 'Live')]
+        [Parameter(ParameterSetName = 'Offline')]
+        [string]$AssessmentName = 'Entra Object Inspector Assessment',
+
+        [Parameter(ParameterSetName = 'Live')]
+        [Parameter(ParameterSetName = 'Offline')]
+        [string]$OutputDirectory = '.\EntraObjectInspector-Exports',
+
+        [Parameter(Mandatory, ParameterSetName = 'Offline')]
+        [string]$SnapshotPath,
+
+        [Parameter(ParameterSetName = 'Live')]
+        [string]$SaveSnapshotPath,
+
+        [Parameter(ParameterSetName = 'Live')]
+        [string[]]$Target = @(),
+
+        [Parameter(ParameterSetName = 'Live')]
+        [string]$TargetFile,
+
+        [Parameter(ParameterSetName = 'Live')]
+        [Parameter(ParameterSetName = 'Offline')]
+        [string]$CompareToSnapshotPath,
+
+        [Parameter(ParameterSetName = 'Live')]
+        [Parameter(ParameterSetName = 'Offline')]
+        [string]$RulePackPath,
+
+        [Parameter(ParameterSetName = 'Live')]
+        [Parameter(ParameterSetName = 'Offline')]
+        [string]$BaselinePath,
+
+        [Parameter(ParameterSetName = 'Live')]
+        [Parameter(ParameterSetName = 'Offline')]
+        [switch]$OpenReport,
+
+        [Parameter(ParameterSetName = 'Live')]
+        [Parameter(ParameterSetName = 'Offline')]
+        [switch]$PassThru,
+
+        [Parameter(ParameterSetName = 'Live')]
+        [Parameter(ParameterSetName = 'Offline')]
+        [hashtable]$AdvancedOptions = @{}
+    )
+
+    $allowedAdvancedOptions = @(
+        'ReportPath',
+        'ObjectType',
+        'MaxObjectsPerType',
+        'BatchSize',
+        'ThrottleDelayMilliseconds',
+        'MaxRetryCount',
+        'CheckpointPath',
+        'Resume',
+        'NoProgress',
+        'SkipConnect',
+        'KeepGraphSession',
+        'LogDirectory',
+        'NoDiagnosticLog',
+        'ClientName',
+        'ConsultantName'
+    )
+
+    $unknownAdvancedOptions = @(
+        $AdvancedOptions.Keys |
+            Where-Object { $allowedAdvancedOptions -notcontains [string]$_ }
+    )
+
+    if ($unknownAdvancedOptions.Count -gt 0) {
+        throw "Unsupported AdvancedOptions key(s): $($unknownAdvancedOptions -join ', '). Supported keys: $($allowedAdvancedOptions -join ', ')."
+    }
+
+    $coreParameters = @{
+        AssessmentName  = $AssessmentName
+        OutputDirectory = $OutputDirectory
+    }
+
+    foreach ($name in @(
+        'SnapshotPath',
+        'SaveSnapshotPath',
+        'Target',
+        'TargetFile',
+        'CompareToSnapshotPath',
+        'RulePackPath',
+        'BaselinePath'
+    )) {
+        if ($PSBoundParameters.ContainsKey($name)) {
+            $coreParameters[$name] = $PSBoundParameters[$name]
+        }
+    }
+
+    if ($OpenReport) {
+        $coreParameters.OpenReport = $true
+    }
+    if ($PassThru) {
+        $coreParameters.PassThru = $true
+    }
+
+    foreach ($name in $AdvancedOptions.Keys) {
+        $coreParameters[[string]$name] = $AdvancedOptions[$name]
+    }
+
+    return Invoke-InspectorSecurityAssessmentCore @coreParameters
 }

@@ -749,6 +749,9 @@ function ConvertTo-InspectorAssessmentExport {
                 -Name 'ScopeInventory'
     }
 
+    $tenantSnapshot = Get-InspectorExportProperty -InputObject $InputObject -Name 'TenantSnapshot'
+    $inventoryDetails = ConvertTo-InspectorInventoryDetails -TenantSnapshot $tenantSnapshot
+
     $tenantCapabilities =
         Get-InspectorExportProperty `
             -InputObject $InputObject `
@@ -1165,6 +1168,7 @@ function ConvertTo-InspectorAssessmentExport {
             TenantId                  = $tenantId
             TenantDisplayName         = $tenantDisplayName
             TenantMetadata            = $tenantMetadata
+            InventoryDetails          = $inventoryDetails
             ModuleVersion             = $moduleVersion
             ScopeInventory            = $scopeInventory
             TenantCapabilities         = $tenantCapabilities

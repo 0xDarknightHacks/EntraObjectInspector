@@ -203,7 +203,7 @@ Describe 'HTML report consultant experience' {
 
             $html | Should -Match '<details'
             $html | Should -Match 'Evidence details'
-            $html | Should -Match 'Grouped Findings'
+            $html | Should -Match '<h2>Findings</h2>'
         }
 
         It 'renders client-side search, filtering, and sorting controls' {
@@ -254,7 +254,7 @@ Describe 'HTML report consultant experience' {
 
             $html = New-InspectorHtmlReport -ReportModel $model
 
-            $html | Should -Match 'Assessment Signals by Category'
+            $html | Should -Match 'At a glance'
             $html | Should -Not -Match '<td><span class="pill status-default"></span></td>'
         }
 

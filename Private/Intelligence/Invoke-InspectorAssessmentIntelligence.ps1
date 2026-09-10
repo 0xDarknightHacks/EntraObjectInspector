@@ -138,11 +138,11 @@ function Invoke-InspectorAssessmentIntelligence {
             (New-InspectorAssessmentFinding `
                 -Category 'IdentityGovernance' `
                 -Title 'Application ownership governance requires review' `
-                -Conclusion 'Identity governance observations indicate ownership or accountability gaps across application-related objects.' `
+                -Conclusion 'Identity governance observations indicate ownership, accountability, or privileged-application owner-control conditions across application-related objects.' `
                 -Severity (Join-InspectorSeverity -Severity @($identityObservations | ForEach-Object { $_.Severity })) `
                 -Confidence (Join-InspectorConfidence -Confidence @($identityObservations | ForEach-Object { $_.Confidence })) `
                 -RelatedObservations $identityObservations `
-                -Recommendation 'Review application and service principal owners, assign at least two accountable owners where possible, and validate inactive, disabled, or external owners.' `
+                -Recommendation 'Review application and service principal owners, assign at least two accountable owners where possible, and treat owners of privileged application identities as part of the privileged access review boundary.' `
                 -MicrosoftReference $ownerReference `
                 -Metadata @{
                     ObservationCount = @($identityObservations).Count
@@ -255,11 +255,11 @@ function Invoke-InspectorAssessmentIntelligence {
             (New-InspectorAssessmentFinding `
                 -Category 'ServicePrincipalGovernance' `
                 -Title 'Service principal governance requires review' `
-                -Conclusion 'Service principal observations indicate state, assignment, counterpart, or ownership-difference conditions that should be validated.' `
+                -Conclusion 'Service principal observations indicate state, counterpart, ownership-difference, privilege-concentration, or restricted-management administrative-unit conditions that should be validated.' `
                 -Severity (Join-InspectorSeverity -Severity @($servicePrincipalObservations | ForEach-Object { $_.Severity })) `
                 -Confidence (Join-InspectorConfidence -Confidence @($servicePrincipalObservations | ForEach-Object { $_.Confidence })) `
                 -RelatedObservations $servicePrincipalObservations `
-                -Recommendation 'Validate the specific counterpart and ownership-consistency conditions listed under Conditions detected; routine enabled/assignment state remains contextual inventory.' `
+                -Recommendation 'Validate counterpart and ownership consistency, and review service principals that combine high-impact Graph permission with directory roles or hold roles over restricted-management administrative units.' `
                 -MicrosoftReference $servicePrincipalReference `
                 -Metadata @{
                     ObservationCount = @($servicePrincipalObservations).Count
@@ -314,15 +314,15 @@ function Invoke-InspectorAssessmentIntelligence {
             (New-InspectorAssessmentFinding `
                 -Category 'UserGovernance' `
                 -Title 'User identity governance signals require review' `
-                -Conclusion 'Finding-eligible user observations indicate high-connectivity or application-ownership relationships in the inspected scope; ordinary role relationships remain contextual inventory.' `
+                -Conclusion 'Finding-eligible user observations include relationship-governance signals and evidence-backed combinations of unresolved risky-user state with active or eligible privilege, privileged groups, or privileged application ownership.' `
                 -Severity (Join-InspectorSeverity -Severity @($userObservations | ForEach-Object { $_.Severity })) `
                 -Confidence (Join-InspectorConfidence -Confidence @($userObservations | ForEach-Object { $_.Confidence })) `
                 -RelatedObservations $userObservations `
-                -Recommendation 'Review the high-connectivity and application-ownership conditions listed under Conditions detected for least privilege and accountability.' `
+                -Recommendation 'Review risky privileged identities first, then validate high-connectivity and application-ownership conditions for least privilege and accountability.' `
                 -MicrosoftReference 'Microsoft Graph role management and directory relationship data support reviewing users with administrative or highly connected relationships.' `
                 -Metadata @{
                     ObservationCount = @($userObservations).Count
-                    CriterionSummary = 'User governance findings use only finding-eligible high-connectivity and ownership conditions; ordinary directory-role relationship presence remains contextual inventory.'
+                    CriterionSummary = 'User governance findings use finding-eligible relationship signals and cross-object risky-privilege combinations; ordinary directory-role relationship presence remains contextual inventory.'
                 })
         )
 
@@ -343,15 +343,15 @@ function Invoke-InspectorAssessmentIntelligence {
             (New-InspectorAssessmentFinding `
                 -Category 'GroupGovernance' `
                 -Title 'Privileged group governance requires review' `
-                -Conclusion 'Group observations indicate role-assignable, privileged, or nested privileged group conditions in the inspected scope.' `
+                -Conclusion 'Group observations indicate role-assignable, actively or PIM-privileged, owner-controlled, membership, or unsupported nesting conditions in the inspected scope.' `
                 -Severity (Join-InspectorSeverity -Severity @($groupObservations | ForEach-Object { $_.Severity })) `
                 -Confidence (Join-InspectorConfidence -Confidence @($groupObservations | ForEach-Object { $_.Confidence })) `
                 -RelatedObservations $groupObservations `
-                -Recommendation 'Review ownership, membership, and nested membership of role-assignable or privileged groups.' `
+                -Recommendation 'Review owners and members of role-assignable or privileged groups, distinguish active from eligible PIM role state, and investigate any unsupported nesting evidence.' `
                 -MicrosoftReference $roleAssignableGroupReference `
                 -Metadata @{
                     ObservationCount = @($groupObservations).Count
-                    CriterionSummary = 'Group governance observations are grouped around role-assignable, privileged, nested, owner, and membership conditions.'
+                    CriterionSummary = 'Group governance observations are grouped around role-assignable, active or eligible privilege, delegated owner control, membership, and unsupported nesting conditions.'
                 })
         )
 
@@ -500,6 +500,7 @@ function Invoke-InspectorAssessmentIntelligence {
         AttackPathsProduced = $false
         IntelligenceScope = @(
             'Observation correlation',
+            'Evidence-backed cross-object privilege correlation',
             'Posture summaries',
             'Category findings',
             'Explainable recommendations',

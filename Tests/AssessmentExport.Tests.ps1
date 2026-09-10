@@ -183,6 +183,25 @@ Describe 'assessment export layer' {
             Should-Invoke Invoke-InspectorGraphRequest -Times 0
         }
 
+        It 'persists report-safe inventory details in the assessment summary' {
+            $tenant = New-TestTenantResult
+            $tenant | Add-Member -NotePropertyName TenantSnapshot -NotePropertyValue ([PSCustomObject]@{
+                Collections = [PSCustomObject]@{
+                    Applications=@(); ServicePrincipals=@(); Groups=@(); DirectoryRoleDefinitions=@(); DirectoryRoleAssignments=@()
+                    RoleAssignmentScheduleInstances=@(); RoleEligibilityScheduleInstances=@(); AdministrativeUnits=@()
+                    Users=@([PSCustomObject]@{ id='user-1'; displayName='Alice Example'; userPrincipalName='alice@example.com' })
+                    RiskyUsers=@([PSCustomObject]@{ id='user-1'; userPrincipalName='alice@example.com'; riskLevel='high'; riskState='atRisk' })
+                    SubscribedSkus=@([PSCustomObject]@{ skuId='sku-1'; skuPartNumber='SPE_E5'; capabilityStatus='Enabled' })
+                }
+            })
+
+            $model = ConvertTo-InspectorAssessmentExport -InputObject $tenant -AssessmentName 'Inventory projection test'
+
+            $model.Summary.InventoryDetails.ActiveSkus[0].Product | Should -Be 'SPE_E5'
+            $model.Summary.InventoryDetails.RiskyUsers[0].DisplayName | Should -Be 'Alice Example'
+            Should -Invoke Invoke-InspectorGraphRequest -Times 0 -Exactly
+        }
+
         It 'builds severity and category summaries deterministically' {
             $tenant =
                 New-TestTenantResult `
@@ -211,6 +230,8 @@ Describe 'assessment export layer' {
             $markdown | Should -Match '# Markdown Test'
             $markdown | Should -Match '## Summary'
             $markdown | Should -Match '## Scope Inventory'
+            $markdown | Should -Match 'Active role schedule instances collected'
+            $markdown | Should -Match 'Eligible role schedule instances collected'
             $markdown | Should -Match '## Detailed Artifacts'
             $markdown | Should -Not -Match '## Security Observations'
         }
@@ -536,4 +557,3 @@ Describe 'assessment export layer' {
         }
     }
 }
-

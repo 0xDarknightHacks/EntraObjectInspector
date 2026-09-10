@@ -1,0 +1,13 @@
+# Keep source and generated text deterministic across Windows/Linux checkouts.
+* text=auto
+*.ps1 text eol=lf
+*.psm1 text eol=lf
+*.psd1 text eol=lf
+*.json text eol=lf
+*.jsonl text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.csv text eol=lf
+*.html text eol=lf
+*.png binary

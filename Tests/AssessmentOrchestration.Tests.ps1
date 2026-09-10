@@ -106,7 +106,7 @@ Describe 'Invoke-EntraSecurityAssessment' {
             Invoke-EntraSecurityAssessment `
                 -AssessmentName 'Skip Connect Test' `
                 -OutputDirectory (Join-Path $TestDrive 'exports') `
-                -SkipConnect |
+                -AdvancedOptions @{ SkipConnect = $true } |
                 Out-Null
 
             Should -Invoke Connect-InspectorGraph -Times 0 -Exactly
@@ -119,23 +119,65 @@ Describe 'Invoke-EntraSecurityAssessment' {
                 )
         }
 
-        It 'uses the default report path under the output directory' {
+        It 'treats a portable snapshot run as offline and forwards the snapshot path without connecting' {
+            $expectedSnapshotPath = Join-Path $TestDrive 'portable-snapshot.json'
+
+            Invoke-EntraSecurityAssessment `
+                -AssessmentName 'Portable Offline Test' `
+                -OutputDirectory (Join-Path $TestDrive 'offline-exports') `
+                -SnapshotPath $expectedSnapshotPath |
+                Out-Null
+
+            Should -Invoke Connect-InspectorGraph -Times 0 -Exactly
+            Should -Invoke Invoke-EntraTenantInspection -Times 1 -Exactly -ParameterFilter {
+                $SnapshotPath -eq $expectedSnapshotPath
+            }
+        }
+
+        It 'forwards targeted, comparison, rule-pack, and baseline options to tenant inspection' {
+            $expectedTargetFile = Join-Path $TestDrive 'targets.txt'
+            $expectedComparisonPath = Join-Path $TestDrive 'previous-snapshot.json'
+            $expectedRulePackPath = Join-Path $TestDrive 'rules.json'
+            $expectedBaselinePath = Join-Path $TestDrive 'baseline.json'
+
+            Invoke-EntraSecurityAssessment `
+                -AssessmentName 'Operational Mode Forwarding Test' `
+                -OutputDirectory (Join-Path $TestDrive 'mode-exports') `
+                -AdvancedOptions @{ SkipConnect = $true } `
+                -TargetFile $expectedTargetFile `
+                -Target @('User|user-1') `
+                -CompareToSnapshotPath $expectedComparisonPath `
+                -RulePackPath $expectedRulePackPath `
+                -BaselinePath $expectedBaselinePath |
+                Out-Null
+
+            Should -Invoke Invoke-EntraTenantInspection -Times 1 -Exactly -ParameterFilter {
+                $TargetFile -eq $expectedTargetFile -and
+                @($Target).Count -eq 1 -and
+                $Target[0] -eq 'User|user-1' -and
+                $CompareToSnapshotPath -eq $expectedComparisonPath -and
+                $RulePackPath -eq $expectedRulePackPath -and
+                $BaselinePath -eq $expectedBaselinePath
+            }
+        }
+
+        It 'uses a run-specific default report path inside the structured export directory' {
             $outputDirectory = Join-Path $TestDrive 'assessment-output'
 
             $result =
                 Invoke-EntraSecurityAssessment `
                     -AssessmentName 'Default Report Path Test' `
                     -OutputDirectory $outputDirectory `
-                    -SkipConnect
+                    -AdvancedOptions @{ SkipConnect = $true }
 
-            $result.ReportPath |
-                Should -Be (Join-Path $outputDirectory 'entra-object-inspector-report.html')
+            $expectedReportPath = Join-Path (Join-Path $outputDirectory 'mock-export') 'entra-object-inspector-report.html'
+            $result.ReportPath | Should -Be $expectedReportPath
 
             Should -Invoke Export-EntraAssessmentReport `
                 -Times 1 `
                 -Exactly `
                 -ParameterFilter {
-                    $OutputPath -eq (Join-Path $outputDirectory 'entra-object-inspector-report.html')
+                    $OutputPath -eq $expectedReportPath
                 }
         }
 
@@ -146,8 +188,7 @@ Describe 'Invoke-EntraSecurityAssessment' {
                 Invoke-EntraSecurityAssessment `
                     -AssessmentName 'Explicit Report Path Test' `
                     -OutputDirectory (Join-Path $TestDrive 'exports') `
-                    -ReportPath $reportPath `
-                    -SkipConnect
+                    -AdvancedOptions @{ ReportPath = $reportPath; SkipConnect = $true }
 
             $result.ReportPath | Should -Be $reportPath
 
@@ -164,17 +205,20 @@ Describe 'Invoke-EntraSecurityAssessment' {
                 Invoke-EntraSecurityAssessment `
                     -AssessmentName 'Invariant Test' `
                     -OutputDirectory (Join-Path $TestDrive 'exports') `
-                    -SkipConnect
+                    -AdvancedOptions @{ SkipConnect = $true }
 
             $result.PSTypeNames[0] | Should -Be 'EntraObjectInspector.SecurityAssessmentResult'
-            $result.SchemaVersion | Should -Be '1.0.0'
+            $result.SchemaVersion | Should -Be '1.1.0'
             $result.Status | Should -Be 'Success'
             $result.TenantInspectionStatus | Should -Be 'Success'
             $result.ExportStatus | Should -Be 'Success'
             $result.ReportStatus | Should -Be 'Success'
             $result.GraphCallsIssued | Should -Be 0
-            $result.IntelligenceAdded | Should -BeFalse
+            $result.IntelligenceAdded | Should -BeTrue
             $result.NewObservationsAdded | Should -BeFalse
+            $result.ReportGraphCallsIssued | Should -Be 0
+            $result.ReportIntelligenceAdded | Should -BeFalse
+            $result.ReportNewObservationsAdded | Should -BeFalse
             $result.RiskScoreProduced | Should -BeFalse
             $result.AttackPathsProduced | Should -BeFalse
             $result.ClientSideInteractivity | Should -BeTrue
@@ -198,7 +242,7 @@ Describe 'Invoke-EntraSecurityAssessment' {
                 Invoke-EntraSecurityAssessment `
                     -AssessmentName 'Summary Test' `
                     -OutputDirectory (Join-Path $TestDrive 'exports') `
-                    -SkipConnect
+                    -AdvancedOptions @{ SkipConnect = $true }
 
             $summary.TenantResult | Should -BeNullOrEmpty
             $summary.AssessmentIntelligence | Should -BeNullOrEmpty
@@ -209,7 +253,7 @@ Describe 'Invoke-EntraSecurityAssessment' {
                 Invoke-EntraSecurityAssessment `
                     -AssessmentName 'PassThru Test' `
                     -OutputDirectory (Join-Path $TestDrive 'exports-expanded') `
-                    -SkipConnect `
+                    -AdvancedOptions @{ SkipConnect = $true } `
                     -PassThru
 
             $expanded.TenantResult.Status | Should -Be 'Success'
@@ -226,21 +270,33 @@ Describe 'Invoke-EntraSecurityAssessment' {
             Invoke-EntraSecurityAssessment `
                 -AssessmentName 'Graph Boundary Test' `
                 -OutputDirectory (Join-Path $TestDrive 'exports') `
-                -SkipConnect |
+                -AdvancedOptions @{ SkipConnect = $true } |
                 Out-Null
 
             Should -Invoke Invoke-InspectorGraphRequest -Times 0 -Exactly
         }
 
-        It 'exposes operational readiness parameters' {
+        It 'exposes a compact assessment command surface with practical help examples' {
             $parameters = (Get-Command Invoke-EntraSecurityAssessment).Parameters.Keys
 
-            $parameters | Should -Contain 'KeepGraphSession'
-            $parameters | Should -Contain 'OpenReport'
-            $parameters | Should -Contain 'LogDirectory'
-            $parameters | Should -Contain 'NoDiagnosticLog'
-            $parameters | Should -Contain 'ClientName'
-            $parameters | Should -Contain 'ConsultantName'
+            $parameters | Should -Contain 'SnapshotPath'
+            $parameters | Should -Contain 'SaveSnapshotPath'
+            $parameters | Should -Contain 'Target'
+            $parameters | Should -Contain 'TargetFile'
+            $parameters | Should -Contain 'CompareToSnapshotPath'
+            $parameters | Should -Contain 'RulePackPath'
+            $parameters | Should -Contain 'BaselinePath'
+            $parameters | Should -Contain 'AdvancedOptions'
+            $parameters | Should -Not -Contain 'BatchSize'
+            $parameters | Should -Not -Contain 'ThrottleDelayMilliseconds'
+            $parameters | Should -Not -Contain 'SkipConnect'
+            $parameters | Should -Not -Contain 'KeepGraphSession'
+
+            $examples = Get-Help Invoke-EntraSecurityAssessment -Examples | Out-String
+            $examples | Should -Match 'Contoso Live Assessment'
+            $examples | Should -Match 'Contoso Offline Review'
+            $examples | Should -Match 'Targeted App Review'
+            $examples | Should -Match 'Snapshot Drift Review'
         }
 
         It 'returns orchestration telemetry and passes report metadata through' {
@@ -286,9 +342,7 @@ Describe 'Invoke-EntraSecurityAssessment' {
                 Invoke-EntraSecurityAssessment `
                     -AssessmentName 'Telemetry Test' `
                     -OutputDirectory (Join-Path $TestDrive 'exports') `
-                    -ClientName 'Client Test' `
-                    -ConsultantName 'Consultant Test' `
-                    -SkipConnect
+                    -AdvancedOptions @{ ClientName = 'Client Test'; ConsultantName = 'Consultant Test'; SkipConnect = $true }
 
             $result.OrchestrationTelemetry | Should -Not -BeNullOrEmpty
             $result.OrchestrationTelemetry.TenantInspectionDurationMs | Should -Not -BeNullOrEmpty
@@ -330,7 +384,7 @@ Describe 'Invoke-EntraSecurityAssessment' {
                 Invoke-EntraSecurityAssessment `
                     -AssessmentName 'Authentication Failure Disconnect Test' `
                     -OutputDirectory (Join-Path $TestDrive 'exports') `
-                    -NoProgress
+                    -AdvancedOptions @{ NoProgress = $true }
             } | Should -Throw '*authentication failed for test*'
 
             Should -Invoke Disconnect-MgGraph -Times 0 -Exactly
@@ -382,6 +436,8 @@ Describe 'Invoke-EntraSecurityAssessment' {
             $result.GraphRequestsAtSnapshotCompletion | Should -Be 0
             $result.GraphRequestsAtAssessmentCompletion | Should -BeGreaterThan 0
             $result.GraphCallsAfterSnapshot | Should -BeGreaterThan 0
+            $result.GraphCallsIssued | Should -Be $result.GraphRequestCount
+            $result.GraphCallsIssued | Should -BeGreaterThan 0
             $result.PackageValidationStatus | Should -Not -Be 'Success'
             $result.ReleaseEligible | Should -BeFalse
             @($result.PackageValidationErrors | Where-Object { [string](Get-InspectorObjectInsightProperty -InputObject $_ -Name 'ErrorId') -eq 'PKG-GRAPH-LIFECYCLE-FINAL-001' }).Count | Should -Be 1
@@ -393,7 +449,7 @@ Describe 'Invoke-EntraSecurityAssessment' {
                 Invoke-EntraSecurityAssessment `
                     -AssessmentName 'Keep Session Test' `
                     -OutputDirectory (Join-Path $TestDrive 'exports') `
-                    -KeepGraphSession
+                    -AdvancedOptions @{ KeepGraphSession = $true }
 
             Should -Invoke Disconnect-MgGraph -Times 0 -Exactly
             $result.GraphSessionDisconnectAttempted | Should -BeFalse
@@ -406,7 +462,7 @@ Describe 'Invoke-EntraSecurityAssessment' {
                 Invoke-EntraSecurityAssessment `
                     -AssessmentName 'Caller Owned Session Test' `
                     -OutputDirectory (Join-Path $TestDrive 'exports') `
-                    -SkipConnect
+                    -AdvancedOptions @{ SkipConnect = $true }
 
             Should -Invoke Disconnect-MgGraph -Times 0 -Exactly
             $result.GraphSessionDisconnectAttempted | Should -BeFalse
@@ -432,7 +488,7 @@ Describe 'Invoke-EntraSecurityAssessment' {
                 Invoke-EntraSecurityAssessment `
                     -AssessmentName 'Diagnostics Test' `
                     -OutputDirectory (Join-Path $TestDrive 'exports') `
-                    -SkipConnect
+                    -AdvancedOptions @{ SkipConnect = $true }
 
             Test-Path -LiteralPath $result.DiagnosticsLogPath | Should -BeTrue
             Test-Path -LiteralPath $result.RunSummaryPath | Should -BeTrue
@@ -470,7 +526,7 @@ Describe 'Invoke-EntraSecurityAssessment' {
                     -AssessmentName 'Open Report Test' `
                     -OutputDirectory (Join-Path $TestDrive 'exports') `
                     -OpenReport `
-                    -SkipConnect
+                    -AdvancedOptions @{ SkipConnect = $true }
 
             Should -Invoke Invoke-Item -Times 1 -Exactly
             $result.ReportOpened | Should -BeTrue
@@ -484,7 +540,7 @@ Describe 'Invoke-EntraSecurityAssessment' {
                     -AssessmentName 'Open Report Failure Test' `
                     -OutputDirectory (Join-Path $TestDrive 'exports') `
                     -OpenReport `
-                    -SkipConnect
+                    -AdvancedOptions @{ SkipConnect = $true }
 
             $result.ReportOpened | Should -BeFalse
             Get-Content -LiteralPath $result.DiagnosticsLogPath -Raw | Should -Match 'ReportOpenFailed'
@@ -495,7 +551,7 @@ Describe 'Invoke-EntraSecurityAssessment' {
                 Invoke-EntraSecurityAssessment `
                     -AssessmentName 'Progress Test' `
                     -OutputDirectory (Join-Path $TestDrive 'exports') `
-                    -SkipConnect `
+                    -AdvancedOptions @{ SkipConnect = $true } `
                     6>&1
             )
 

@@ -40,7 +40,7 @@ Describe 'Requirements validation helper' {
         $manifest = Import-PowerShellDataFile -LiteralPath $modulePath
         $scriptContent = Get-Content -LiteralPath $scriptPath -Raw
 
-        [version]$manifest.ModuleVersion | Should -Be ([version]'1.0.2')
+        [version]$manifest.ModuleVersion | Should -Be ([version]'1.1.0')
         [version]$manifest.PowerShellVersion | Should -Be ([version]'7.6')
         $scriptContent | Should -Match "\[Version\]'7\.6'"
 
@@ -75,6 +75,7 @@ Describe 'Requirements validation helper' {
         $content | Should -Match 'Pester -RequiredVersion 6\.1\.0'
         $content | Should -Match 'EntraObjectInspector-Exports'
         $content | Should -Match 'EntraObjectInspector-Reports'
+        $content | Should -Match 'EntraObjectInspector-Offline-Exports'
         $content | Should -Match "'snapshots'"
         $content | Should -Match "'logs'"
         $content | Should -Match "'TestResults'"

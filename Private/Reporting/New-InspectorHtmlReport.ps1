@@ -4,209 +4,255 @@ function Get-InspectorReportSharedCss {
 
     return @'
 :root {
-  color-scheme: dark;
-  --font: "Segoe UI Variable Text","Segoe UI",Inter,system-ui,Arial,sans-serif;
-  --radius: 10px;
-  --radius-sm: 7px;
-  --bg: #14181c;
-  --panel: #1b2126;
-  --panel-soft: #212830;
-  --text: #e7ecef;
-  --muted: #a6b0b8;
-  --faint: #74818b;
-  --line: #2b333b;
-  --line-soft: #232a31;
-  --accent: #4fd1c5;
-  --accent-strong: #6ee8dc;
-  --accent-soft: rgba(79, 209, 197, .14);
-  --high: #e2716b;
-  --medium: #e0a94c;
-  --low: #79a6d2;
-  --info: #4fd1c5;
-  --high-bg: rgba(226, 113, 107, .14);
-  --medium-bg: rgba(224, 169, 76, .14);
-  --low-bg: rgba(121, 166, 210, .14);
-  --info-bg: rgba(79, 209, 197, .14);
-  --highlight-bg: #fde68a;
-  --highlight-text: #111827;
-  --highlight-border: #f59e0b;
-  --shadow: 0 4px 18px rgba(0, 0, 0, .35);
+  color-scheme: light;
+  --font: "Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,BlinkMacSystemFont,Arial,sans-serif;
+  --radius: 8px;
+  --radius-sm: 4px;
+  --bg: #f5f5f5;
+  --panel: #ffffff;
+  --panel-soft: #fafafa;
+  --panel-strong: #f0f0f0;
+  --text: #242424;
+  --muted: #616161;
+  --faint: #707070;
+  --line: #d1d1d1;
+  --line-soft: #e0e0e0;
+  --brand: #0f6cbd;
+  --brand-hover: #115ea3;
+  --brand-pressed: #0c3b5e;
+  --brand-soft: #ebf3fc;
+  --high: #c50f1f;
+  --medium: #8a4b08;
+  --low: #0f6cbd;
+  --info: #0078d4;
+  --success: #107c10;
+  --high-bg: #fdf3f4;
+  --medium-bg: #fff8f0;
+  --low-bg: #f0f6fc;
+  --info-bg: #f0f6fc;
+  --success-bg: #f1faf1;
+  --highlight-bg: #fff4ce;
+  --highlight-text: #242424;
+  --highlight-border: #c19c00;
+  --shadow: 0 1.6px 3.6px rgba(0,0,0,.132), 0 .3px .9px rgba(0,0,0,.108);
 }
 
-[data-theme="light"] {
-  color-scheme: light;
-  --bg: #f5f7f8;
-  --panel: #ffffff;
-  --panel-soft: #eef1f2;
-  --text: #1b2126;
-  --muted: #4c565d;
-  --faint: #77828a;
-  --line: #dde3e6;
-  --line-soft: #e6eaec;
-  --accent: #0f8c80;
-  --accent-strong: #0b6b62;
-  --accent-soft: rgba(15, 140, 128, .10);
-  --high: #b64842;
-  --medium: #a8701c;
-  --low: #35618f;
-  --info: #0f8c80;
-  --high-bg: rgba(182, 72, 66, .09);
-  --medium-bg: rgba(168, 112, 28, .10);
-  --low-bg: rgba(53, 97, 143, .09);
-  --info-bg: rgba(15, 140, 128, .10);
-  --highlight-bg: #fef3c7;
-  --highlight-text: #111827;
-  --highlight-border: #d97706;
-  --shadow: 0 2px 10px rgba(20, 30, 35, .08);
+[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #1f1f1f;
+  --panel: #292929;
+  --panel-soft: #242424;
+  --panel-strong: #333333;
+  --text: #ffffff;
+  --muted: #d6d6d6;
+  --faint: #adadad;
+  --line: #666666;
+  --line-soft: #424242;
+  --brand: #479ef5;
+  --brand-hover: #62abf5;
+  --brand-pressed: #77b7f7;
+  --brand-soft: #0e4775;
+  --high: #ff99a4;
+  --medium: #fce100;
+  --low: #62abf5;
+  --info: #62abf5;
+  --success: #54b054;
+  --high-bg: #442726;
+  --medium-bg: #4a3d16;
+  --low-bg: #0e4775;
+  --info-bg: #0e4775;
+  --success-bg: #163b16;
+  --highlight-bg: #8a6a00;
+  --highlight-text: #ffffff;
+  --highlight-border: #fce100;
+  --shadow: 0 2px 8px rgba(0,0,0,.45);
 }
 * { box-sizing: border-box; }
 html { scroll-behavior: smooth; }
 body {
   margin: 0;
   font-family: var(--font);
-  font-size: 15.5px;
+  font-size: 14px;
   line-height: 1.5;
   background: var(--bg);
   color: var(--text);
   -webkit-font-smoothing: antialiased;
 }
-a { color: var(--accent); }
-.shell { max-width: 980px; margin: 0 auto; padding: 28px 20px 80px; }
-.hero { border-bottom: 1px solid var(--line-soft); }
+a { color: var(--brand); text-underline-offset: 2px; }
+a:hover { color: var(--brand-hover); }
+a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+.shell { max-width: 1180px; margin: 0 auto; padding: 24px 24px 72px; }
+.hero { background: var(--panel); border-bottom: 1px solid var(--line-soft); }
 .hero-grid {
-  max-width: 980px;
+  max-width: 1180px;
   margin: 0 auto;
-  padding: 28px 20px 20px;
+  padding: 20px 24px 18px;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 16px;
+  gap: 20px;
   align-items: start;
 }
-.brand { color: var(--muted); font-size: 14.5px; font-weight: 600; letter-spacing: .2px; }
-h1 { margin: 4px 0 8px; font-size: 22px; line-height: 1.15; font-weight: 650; letter-spacing: 0; }
-h2 { margin: 0 0 14px; font-size: 15.5px; font-weight: 650; letter-spacing: 0; }
-h3 { margin: 0; font-size: 13.2px; font-weight: 650; letter-spacing: 0; }
-.hero p { margin: 8px 0 0; max-width: 780px; color: var(--muted); }
-.hero-meta, .finding-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
-.toolbar { display: flex; flex-wrap: wrap; gap: 8px; justify-content: end; }
-button, .filter-button {
-  min-height: 34px;
+.brand-lockup { display:flex; align-items:center; gap:10px; }
+.brand-accent { width:4px; height:28px; border-radius:2px; background:var(--brand); flex:0 0 auto; }
+.brand { color: var(--muted); font-size: 12px; font-weight: 600; letter-spacing: .15px; }
+.product-label { color: var(--text); font-size: 13px; font-weight: 600; }
+h1 { margin: 5px 0 6px; font-size: 24px; line-height: 1.25; font-weight: 600; letter-spacing: -.2px; }
+h2 { margin: 0 0 12px; font-size: 20px; line-height: 1.3; font-weight: 600; }
+h3 { margin: 0; font-size: 15px; line-height: 1.35; font-weight: 600; }
+.hero p { margin: 6px 0 0; max-width: 760px; color: var(--muted); }
+.hero-meta, .finding-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.toolbar { display: flex; flex-wrap: wrap; gap: 6px; justify-content: end; }
+button, .filter-button, .open-btn, .nav-button {
+  min-height: 32px;
   border: 1px solid var(--line);
   background: var(--panel);
-  color: var(--muted);
+  color: var(--text);
   border-radius: var(--radius-sm);
-  padding: 6px 12px;
+  padding: 5px 10px;
   font: inherit;
-  font-size: 12.8px;
+  font-size: 12.5px;
   font-weight: 600;
   cursor: pointer;
+  text-decoration: none;
 }
-button:hover, .filter-button:hover, .filter-button.is-active { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
-#themeToggle { border-radius: 999px; }
+button:hover, .filter-button:hover, .filter-button.is-active, .open-btn:hover, .nav-button:hover {
+  border-color: var(--brand);
+  color: var(--brand-hover);
+  background: var(--brand-soft);
+}
+.primary-link { background:var(--brand); border-color:var(--brand); color:#fff; }
+.primary-link:hover { background:var(--brand-hover); border-color:var(--brand-hover); color:#fff; }
+#themeToggle { white-space: nowrap; }
 .pill {
   display: inline-flex;
   align-items: center;
   border-radius: 999px;
-  padding: 4px 10px;
-  font-size: 12px;
+  padding: 3px 8px;
+  font-size: 11.5px;
   font-weight: 600;
   border: 1px solid var(--line);
   white-space: nowrap;
 }
-.severity-high, .status-danger { background: var(--high-bg); color: var(--high); }
-.severity-medium, .status-warning { background: var(--medium-bg); color: var(--medium); }
-.severity-low, .status-info { background: var(--low-bg); color: var(--low); }
-.severity-info, .status-success { background: var(--info-bg); color: var(--info); }
-.status-default { background: var(--panel-soft); color: var(--muted); }
-.metric-grid, .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 18px 0 22px; }
-.metric-card, .finding-card, .category-card, .trust-box, .section {
+.severity-high, .status-danger { background: var(--high-bg); color: var(--high); border-color: var(--high); }
+.severity-medium, .status-warning { background: var(--medium-bg); color: var(--medium); border-color: var(--medium); }
+.severity-low, .status-info { background: var(--low-bg); color: var(--low); border-color: var(--low); }
+.severity-info { background: var(--info-bg); color: var(--info); border-color: var(--info); }
+.status-success { background: var(--success-bg); color: var(--success); border-color: var(--success); }
+.status-default { background: var(--panel-strong); color: var(--muted); }
+.metric-grid, .metrics { display:grid; grid-template-columns:repeat(auto-fit,minmax(155px,1fr)); gap:10px; margin:14px 0 0; }
+.metric-card, .finding-card, .context-panel, .technical-panel, .category-card, .trust-box {
   background: var(--panel);
   border: 1px solid var(--line-soft);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
 }
-.metric-card { padding: 12px; }
-.metric-label { color: var(--faint); font-size: 11.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .4px; }
-.metric-value { margin-top: 3px; font-size: 20px; font-weight: 650; }
-.metric-hint { margin-top: 5px; color: var(--faint); font-size: 12.5px; }
-.section { margin: 0 0 34px; padding: 0; background: transparent; border: 0; box-shadow: none; }
-.section-header { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; margin-bottom: 10px; }
+.metric-card { padding: 12px 14px; border-top: 3px solid var(--line-soft); }
+.metric-card.severity-high { border-top-color:var(--high); }
+.metric-card.severity-medium { border-top-color:var(--medium); }
+.metric-card.severity-low, .metric-card.status-info { border-top-color:var(--low); }
+.metric-label { color: var(--muted); font-size: 11.5px; font-weight: 600; }
+.metric-value { margin-top: 2px; font-size: 22px; font-weight: 600; }
+.metric-hint { margin-top: 4px; color: var(--faint); font-size: 12px; }
+.section { margin: 0 0 30px; }
+.section-header { display:flex; justify-content:space-between; gap:12px; align-items:baseline; margin-bottom:10px; }
+.section-intro { margin:-4px 0 12px; color:var(--muted); max-width:850px; }
 .muted { color: var(--muted); }
-.empty-state { margin: 0; padding: 14px; color: var(--muted); background: var(--panel); border: 1px dashed var(--line-soft); border-radius: var(--radius); }
-.filter-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
-.investigation-bar {
-  display: grid;
-  grid-template-columns: minmax(240px, 1fr) minmax(150px, .35fr) auto;
-  gap: 8px;
-  margin-bottom: 10px;
-}
+.empty-state { margin:0; padding:14px; color:var(--muted); background:var(--panel); border:1px dashed var(--line); border-radius:var(--radius); }
+.report-section > details { background:var(--panel); border:1px solid var(--line-soft); border-radius:var(--radius); box-shadow:var(--shadow); overflow:hidden; }
+.section-summary { display:flex; justify-content:space-between; gap:16px; align-items:center; cursor:pointer; padding:14px 16px; font-weight:600; }
+.section-summary::marker { color:var(--brand); }
+.summary-hint { color:var(--muted); font-size:12px; font-weight:400; }
+.section-body { padding:0 16px 16px; border-top:1px solid var(--line-soft); }
+.filter-row { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:12px; }
+.investigation-bar { display:grid; grid-template-columns:minmax(280px,1fr) minmax(160px,.35fr) auto; gap:8px; margin-bottom:10px; }
 .investigation-bar input, .investigation-bar select {
-  min-height: 38px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--panel-soft);
-  color: var(--text);
-  padding: 8px 10px;
-  font: inherit;
+  min-height:34px;
+  border:1px solid var(--line);
+  border-radius:var(--radius-sm);
+  background:var(--panel);
+  color:var(--text);
+  padding:6px 9px;
+  font:inherit;
 }
-.finding-list { display: grid; gap: 12px; }
-.finding-card { padding: 14px 16px; border-left: 3px solid var(--line); }
-.finding-card[data-severity="High"] { border-left-color: var(--high); }
-.finding-card[data-severity="Medium"] { border-left-color: var(--medium); }
-.finding-card[data-severity="Low"] { border-left-color: var(--low); }
-.finding-card[data-severity="Informational"] { border-left-color: var(--info); }
-.finding-card[hidden] { display: none; }
-.finding-top { display: flex; justify-content: space-between; gap: 12px; align-items: start; }
-.finding-title { margin: 8px 0 5px; font-weight: 600; font-size: 14.8px; }
-.finding-action { margin-top: 10px; padding: 10px; background: var(--panel-soft); border-radius: var(--radius-sm); font-size: 13.4px; }
-mark.search-hit {
-  background: var(--highlight-bg);
-  color: var(--highlight-text);
-  border: 1px solid var(--highlight-border);
-  border-radius: 4px;
-  padding: 0 2px;
-  font-weight: 800;
-}
-details.evidence { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 9px; }
-details.evidence > summary { cursor: pointer; color: var(--muted); font-weight: 600; font-size: 12.6px; list-style: none; }
-details.evidence > summary::-webkit-details-marker { display: none; }
-details.evidence > summary::before { content: ">"; display: inline-block; margin-right: 6px; color: var(--faint); transition: transform .12s ease; }
-details.evidence[open] > summary::before { transform: rotate(90deg); }
-.evidence-list { margin: 9px 0 0; padding: 11px 13px 11px 28px; color: var(--muted); font-size: 13px; background: var(--panel-soft); border: 1px solid var(--line-soft); border-radius: var(--radius-sm); }
-.official-references { margin-top: 8px; color: var(--text); }
-.official-references ul { margin: 6px 0 0; padding-left: 18px; }
-.official-references li { margin-bottom: 5px; }
-.action-list { margin: 0; padding-left: 22px; }
-.action-list li { margin-bottom: 10px; }
-.category-grid, .trust-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; }
-.category-card, .trust-box { padding: 13px 14px; }
-.category-count { font-size: 19px; font-weight: 650; margin-top: 4px; color: var(--accent); }
-.data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-.table-wrap { overflow-x: auto; }
-th, td { text-align: left; border-bottom: 1px solid var(--line); padding: 9px; vertical-align: top; }
-th { color: var(--muted); background: var(--panel-soft); }
-.footer { color: var(--muted); text-align: center; font-size: 12.5px; padding: 22px 24px 30px; }
+.finding-list { display:grid; gap:12px; }
+.finding-card { padding:16px 18px; border-left:4px solid var(--line); }
+.finding-card[data-severity="High"] { border-left-color:var(--high); }
+.finding-card[data-severity="Medium"] { border-left-color:var(--medium); }
+.finding-card[data-severity="Low"] { border-left-color:var(--low); }
+.finding-card[data-severity="Informational"] { border-left-color:var(--info); }
+.finding-card[hidden] { display:none; }
+.finding-top { display:flex; justify-content:space-between; gap:12px; align-items:start; }
+.finding-category { color:var(--muted); font-size:12px; }
+.finding-title { margin:10px 0 12px; font-size:17px; font-weight:600; }
+.finding-summary-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin:0 0 12px; }
+.finding-summary-item { padding:10px 12px; background:var(--panel-soft); border:1px solid var(--line-soft); border-radius:var(--radius-sm); }
+.field-label { display:block; margin-bottom:3px; color:var(--muted); font-size:11.5px; font-weight:600; }
+.field-value { color:var(--text); font-size:13px; }
+.finding-action { margin-top:12px; padding:11px 12px; background:var(--brand-soft); border-left:3px solid var(--brand); border-radius:var(--radius-sm); font-size:13px; }
+.affected-objects { margin-top:12px; }
+.affected-objects > .muted { display:block; margin-bottom:6px; font-size:12px; }
+.finding-technical { margin-top:12px; border-top:1px solid var(--line-soft); padding-top:10px; }
+.finding-technical > summary, details.evidence > summary { cursor:pointer; color:var(--brand); font-weight:600; font-size:12.5px; }
+details.evidence { margin-top:10px; }
+.evidence-list { margin:9px 0 0; padding:10px 12px 10px 26px; color:var(--muted); font-size:12.5px; background:var(--panel-soft); border:1px solid var(--line-soft); border-radius:var(--radius-sm); }
+.official-references { margin-top:8px; color:var(--text); }
+.official-references ul { margin:6px 0 0; padding-left:18px; }
+.official-references li { margin-bottom:4px; }
+.context-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:12px; }
+.context-panel { padding:14px 16px; }
+.context-panel h3 { margin-bottom:4px; }
+.context-count { font-size:24px; font-weight:600; color:var(--brand); }
+.context-copy { margin:2px 0 10px; color:var(--muted); font-size:12.5px; }
+.context-list { margin-top:12px; }
+.technical-links { display:flex; flex-wrap:wrap; gap:8px; margin:10px 0 14px; }
+.posture-banner { display:flex; justify-content:space-between; gap:16px; align-items:center; padding:14px 16px; margin-bottom:12px; background:var(--panel); border:1px solid var(--line-soft); border-left:4px solid var(--brand); border-radius:var(--radius); box-shadow:var(--shadow); }
+.posture-banner.high { border-left-color:var(--high); }
+.posture-banner.medium { border-left-color:var(--medium); }
+.posture-banner.low { border-left-color:var(--low); }
+.posture-label { font-size:16px; font-weight:600; }
+.posture-text { color:var(--muted); margin-top:2px; font-size:12.5px; }
+.narrative { padding:0 2px; }
+.narrative p { margin:6px 0; }
+.action-list { margin:0; padding-left:22px; }
+.action-list li { margin-bottom:8px; }
+.category-grid, .trust-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:10px; }
+.category-card, .trust-box { padding:13px 14px; }
+.category-count { font-size:19px; font-weight:600; margin-top:4px; color:var(--brand); }
+.data-table { width:100%; border-collapse:collapse; font-size:12.5px; }
+.table-wrap { overflow-x:auto; border:1px solid var(--line-soft); border-radius:var(--radius-sm); }
+th, td { text-align:left; border-bottom:1px solid var(--line-soft); padding:8px 9px; vertical-align:top; }
+th { color:var(--muted); background:var(--panel-strong); font-weight:600; }
+tbody tr:last-child td { border-bottom:0; }
+tbody tr:hover { background:var(--panel-soft); }
+.inventory-detail { margin-top:8px; padding:9px 0; border-top:1px solid var(--line-soft); }
+.inventory-detail > summary { display:flex; justify-content:space-between; gap:12px; }
+.limitations { margin:10px 0 0; padding-left:20px; }
+.limitations li { margin-bottom:6px; }
+.footer { color:var(--muted); text-align:center; font-size:12px; padding:20px 24px 28px; }
+.report-nav { display:flex; flex-wrap:wrap; gap:6px; align-items:center; justify-content:flex-end; }
+.report-nav .pill { text-decoration:none; border-radius:var(--radius-sm); padding:5px 9px; }
+.report-nav .is-active { border-color:var(--brand); color:var(--brand); background:var(--brand-soft); }
+.filter { margin:0 0 14px; width:100%; min-height:34px; border:1px solid var(--line); border-radius:var(--radius-sm); background:var(--panel); color:var(--text); padding:6px 9px; font:inherit; }
+.card { background:var(--panel); border:1px solid var(--line-soft); border-radius:var(--radius); box-shadow:var(--shadow); padding:14px 16px; margin:0 0 12px; }
+mark.search-hit { background:var(--highlight-bg); color:var(--highlight-text); border:1px solid var(--highlight-border); border-radius:2px; padding:0 1px; font-weight:600; }
 @media (max-width: 760px) {
-  .hero-grid { grid-template-columns: 1fr; }
-  .toolbar { justify-content: start; }
-  .investigation-bar { grid-template-columns: 1fr; }
-  .shell { padding: 14px; }
+  .hero-grid { grid-template-columns:1fr; }
+  .toolbar, .report-nav { justify-content:start; }
+  .investigation-bar, .finding-summary-grid { grid-template-columns:1fr; }
+  .shell { padding:16px; }
 }
 @media print {
-  :root, [data-theme="light"] {
-    --bg: #ffffff; --panel: #ffffff; --panel-soft: #f7f7f7; --text: #111827; --muted: #4b5563; --faint: #6b7280; --line: #d1d5db; --line-soft: #e5e7eb; --shadow: none;
+  :root, [data-theme="dark"] {
+    --bg:#ffffff; --panel:#ffffff; --panel-soft:#fafafa; --panel-strong:#f5f5f5; --text:#111111; --muted:#444444; --faint:#666666; --line:#c8c8c8; --line-soft:#e3e3e3; --shadow:none;
   }
-  .toolbar, .filter-row { display: none; }
-  .hero, .section, .metric-card, .finding-card, .category-card, .trust-box { box-shadow: none; break-inside: avoid; }
-  details.evidence:not([open]) > * { display: block; }
-  mark.search-hit { border: 1px solid #92400e; background: #fef3c7; color: #111827; }
+  .toolbar, .filter-row, .investigation-bar { display:none; }
+  .hero, .section, .metric-card, .finding-card, .context-panel, .technical-panel { box-shadow:none; break-inside:avoid; }
+  details:not([open]) > * { display:block; }
+  mark.search-hit { border:1px solid #8a6a00; background:#fff4ce; color:#111111; }
 }
-.report-nav { display:flex; flex-wrap:wrap; gap:8px; align-items:center; justify-content:flex-end; }
-.report-nav .pill { text-decoration:none; }
-.report-nav .is-active { border-color:var(--accent); color:var(--accent); background:var(--accent-soft); }
-.filter { margin:0 0 14px; width:100%; min-height:38px; border:1px solid var(--line); border-radius:var(--radius-sm); background:var(--panel-soft); color:var(--text); padding:8px 10px; font:inherit; }
-.card { background:var(--panel); border:1px solid var(--line-soft); border-radius:var(--radius); box-shadow:var(--shadow); padding:14px 16px; margin:0 0 12px; }
-
 '@
 }
 
@@ -222,6 +268,7 @@ function New-InspectorReportHtmlDocument {
         [string]$MainReportFileName = '',
         [string]$EvidenceReportFileName = '',
         [string]$DiagnosticsReportFileName = '',
+        [string]$TenantId = '',
         [ValidateSet('Assessment','Evidence','Diagnostics')][string]$ActiveView = 'Assessment',
         [string]$Script = ''
     )
@@ -229,6 +276,7 @@ function New-InspectorReportHtmlDocument {
     $encodedTitle = ConvertTo-InspectorHtmlEncodedText $Title
     $encodedSubtitle = ConvertTo-InspectorHtmlEncodedText $Subtitle
     $css = Get-InspectorReportSharedCss
+    $tenantPortalUrl = Get-InspectorTenantPortalBaseUrl -TenantId $TenantId
 
     $metaItems = [System.Collections.Generic.List[string]]::new()
     if (-not [string]::IsNullOrWhiteSpace($GeneratedAt)) {
@@ -253,7 +301,12 @@ function New-InspectorReportHtmlDocument {
             $navItems.Add('<a class="pill' + $activeClass + '" href="' + (ConvertTo-InspectorHtmlEncodedText $navDefinition.FileName) + '">' + $navDefinition.Label + '</a>')
         }
     }
-    $navItems.Add('<a class="pill" href="https://entra.microsoft.com/" target="_blank" rel="noopener noreferrer">Open Microsoft Entra admin center</a>')
+    if ($ActiveView -eq 'Assessment') {
+        $navItems.Add('<a class="pill" href="#priority-findings">Findings</a>')
+        $navItems.Add('<a class="pill" href="#privileged-identity-context">Identity context</a>')
+        $navItems.Add('<a class="pill" href="#technical-appendix">Technical appendix</a>')
+    }
+    $navItems.Add('<a class="pill primary-link" href="' + (ConvertTo-InspectorHtmlEncodedText $tenantPortalUrl) + '" target="_blank" rel="noopener noreferrer">Open Microsoft Entra</a>')
     $navigationHtml = '<nav class="report-nav" aria-label="Report navigation">' + ($navItems -join '') + '<button id="themeToggle" type="button">Toggle theme</button></nav>'
 
     $subtitleHtml = if (-not [string]::IsNullOrWhiteSpace($encodedSubtitle)) { '<p>' + $encodedSubtitle + '</p>' } else { '' }
@@ -261,7 +314,7 @@ function New-InspectorReportHtmlDocument {
 
     return @"
 <!doctype html>
-<html lang="en" data-theme="dark" data-eoi-report-shell="1.0">
+<html lang="en" data-theme="light" data-eoi-report-shell="1.0">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -274,7 +327,7 @@ $css
   <header class="hero">
     <div class="hero-grid">
       <div>
-        <div class="brand">Entra Object Inspector</div>
+        <div class="brand-lockup"><span class="brand-accent" aria-hidden="true"></span><div><div class="brand">Microsoft Entra ID assessment</div><div class="product-label">Entra Object Inspector</div></div></div>
         <h1>$encodedTitle</h1>
         $heroMetaHtml
         $subtitleHtml
@@ -285,7 +338,7 @@ $css
   <main class="shell">
 $Body
   </main>
-  <footer class="footer">Generated by Entra Object Inspector. Static HTML report. Offline compatible.</footer>
+  <footer class="footer">Generated by Entra Object Inspector · Read-only assessment · Static HTML · Offline compatible</footer>
   $scriptHtml
 </body>
 </html>
@@ -309,6 +362,8 @@ function New-InspectorHtmlReport {
 
     $posture = Get-InspectorReportProperty -InputObject $ReportModel -Name 'TenantPosture'
     $postureLabel = ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $posture -Name 'Label')
+    $summary = Get-InspectorReportProperty -InputObject $ReportModel -Name 'Summary'
+    $tenantId = ConvertTo-InspectorReportString (Get-InspectorReportMetricValue -InputObject $summary -Names @('TenantId','TenantID'))
 
     if ([string]::IsNullOrWhiteSpace($postureLabel)) {
         $postureLabel = 'Not available'
@@ -414,8 +469,8 @@ function New-InspectorHtmlReport {
     applyFindingFilters();
   }
   document.addEventListener('DOMContentLoaded', function () {
-    var saved = 'dark';
-    try { saved = localStorage.getItem('eoi-theme') || 'dark'; } catch (error) {}
+    var saved = 'light';
+    try { saved = localStorage.getItem('eoi-theme') || 'light'; } catch (error) {}
     setTheme(saved);
     var themeToggle = document.getElementById('themeToggle');
     if (themeToggle) {
@@ -482,27 +537,26 @@ function New-InspectorHtmlReport {
 
     $body = @(
         New-InspectorClientTenantDetailsHtml -ReportModel $ReportModel
-        New-InspectorScopeStatementHtml -ReportModel $ReportModel
-        New-InspectorScopeInventoryHtml -ReportModel $ReportModel
-        New-InspectorTenantCapabilitiesHtml -ReportModel $ReportModel
         New-InspectorExecutiveSummaryHtml -ReportModel $ReportModel
-        New-InspectorAssessmentAccountingHtml -ReportModel $ReportModel
-        New-InspectorSeverityMethodologyHtml -ReportModel $ReportModel
         New-InspectorSummaryMetricsHtml -ReportModel $ReportModel
-        New-InspectorFindingsByCategoryHtml -ReportModel $ReportModel
         New-InspectorPriorityFindingsHtml -ReportModel $ReportModel
+        New-InspectorPrivilegedIdentityContextHtml -ReportModel $ReportModel
+        New-InspectorApplicationIdentityContextHtml -ReportModel $ReportModel
+        New-InspectorAssessmentNotesHtml -ReportModel $ReportModel
+        New-InspectorScopeInventoryHtml -ReportModel $ReportModel
     ) -join [Environment]::NewLine
 
     return New-InspectorReportHtmlDocument `
         -Title (ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $ReportModel -Name 'AssessmentName')) `
+        -Subtitle 'Read-only Microsoft Entra ID security assessment. Start with High findings, then review affected objects and evidence.' `
         -Body $body `
-        -Subtitle 'Read-only, snapshot-first assessment output for administrator triage. Findings preserve evidence and can be reviewed offline without Microsoft Graph calls.' `
         -GeneratedAt (ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $ReportModel -Name 'GeneratedAt')) `
         -ReportId $reportId `
         -PostureLabel $postureLabel `
         -MainReportFileName (ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $ReportModel -Name 'ReportFileName')) `
         -EvidenceReportFileName (ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $ReportModel -Name 'EvidenceReportFileName')) `
         -DiagnosticsReportFileName (ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $ReportModel -Name 'DiagnosticsReportFileName')) `
+        -TenantId $tenantId `
         -ActiveView 'Assessment' `
         -Script $script
 }
@@ -534,8 +588,8 @@ function New-InspectorSidecarHtmlDocument {
     try{target.scrollIntoView({block:'start'});}catch(error){}
   }
   document.addEventListener('DOMContentLoaded',function(){
-    var saved='dark';
-    try{saved=localStorage.getItem('eoi-theme')||'dark'}catch(error){}
+    var saved='light';
+    try{saved=localStorage.getItem('eoi-theme')||'light'}catch(error){}
     setTheme(saved);
     var toggle=document.getElementById('themeToggle');
     if(toggle)toggle.addEventListener('click',function(){setTheme(document.documentElement.getAttribute('data-theme')==='light'?'dark':'light')});
@@ -559,6 +613,7 @@ function New-InspectorSidecarHtmlDocument {
         -MainReportFileName (ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $ReportModel -Name 'ReportFileName')) `
         -EvidenceReportFileName (ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $ReportModel -Name 'EvidenceReportFileName')) `
         -DiagnosticsReportFileName (ConvertTo-InspectorReportString (Get-InspectorReportProperty -InputObject $ReportModel -Name 'DiagnosticsReportFileName')) `
+        -TenantId (ConvertTo-InspectorReportString (Get-InspectorReportMetricValue -InputObject (Get-InspectorReportProperty -InputObject $ReportModel -Name 'Summary') -Names @('TenantId','TenantID'))) `
         -ActiveView $ActiveView `
         -Script $sidecarScript
 }

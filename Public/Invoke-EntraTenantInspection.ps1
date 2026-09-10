@@ -482,6 +482,11 @@ function Invoke-EntraTenantInspection {
             Where-Object { $null -ne $_ }
         )
 
+    $crossObjectSecurityObservations = @(
+        Get-InspectorCrossObjectSecurityObservations -ObjectInsights @($objectInsights)
+    )
+    $securityObservations = @($securityObservations + $crossObjectSecurityObservations)
+
     $policyResult = Invoke-InspectorAssessmentPolicy -Observations $securityObservations -SnapshotComparison $snapshotComparison -RulePackPath $RulePackPath -BaselinePath $BaselinePath
     $securityObservations = @($policyResult.Observations)
     $snapshotComparison = $policyResult.SnapshotComparison
