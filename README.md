@@ -56,7 +56,7 @@ Entra Object Inspector collects tenant data through Microsoft Graph, builds a de
 | Targeting | Targeted assessments, rule packs, accepted-condition baselines |
 | Reporting | JSON, CSV, Markdown, diagnostics, evidence, and HTML reports |
 
-> Entra Object Inspector is an **assessment and investigation** tool. It does not remediate tenant configuration or calculate numerical risk scores.
+> Entra Object Inspector is a read-only **assessment and investigation** tool. It does not remediate tenant configuration or calculate numerical risk scores.
 
 ## Screenshots
 
