@@ -24,23 +24,23 @@ It is designed for assessment and investigation only. It does **not** remediate 
 
 ## Screenshots
 
-> **Screenshot placeholder — CLI assessment summary**  
-> Suggested image: a successful `Invoke-EntraSecurityAssessment` run showing mode, Graph statistics, package status, and report path.  
-> Suggested path: `docs/images/cli-assessment-summary.png`
+> **CLI assessment invoke**  
+![CLI assessment summary](assets/images/cli-assessment.png)
 
-<!-- ![CLI assessment summary](docs/images/cli-assessment-summary.png) -->
+> **Main HTML report overview**  
+![Main HTML report](assets/images/report-overview.png)
 
-> **Screenshot placeholder — main HTML report**  
-> Suggested image: the report overview showing severity metrics, grouped findings, and tenant context.  
-> Suggested path: `docs/images/report-overview.png`
+> **Finding evidence drill-down**  
+![Finding evidence drill-down](assets/images/finding-evidence.png)
 
-<!-- ![Main HTML report](docs/images/report-overview.png) -->
+> **Privileged Identity overview**  
+![Main HTML report](assets/images/privileged-identity.png)
 
-> **Screenshot placeholder — finding evidence drill-down**  
-> Suggested image: one grouped finding showing affected objects, why it matters, supporting evidence, and Entra navigation.  
-> Suggested path: `docs/images/finding-evidence.png`
+> **Evidence report overview**  
+![Finding evidence drill-down](assets/images/evidence.png)
 
-<!-- ![Finding evidence drill-down](docs/images/finding-evidence.png) -->
+> **Diagnostics report overview**  
+![Finding evidence drill-down](assets/images/diagnostics.png)
 
 ## Requirements
 
