@@ -2,16 +2,18 @@
 
 # Entra Object Inspector
 
-**Read-only security assessment for Microsoft Entra ID**
+**Evidence-driven identity inspection for Microsoft Entra ID**
 
 [![Release](https://img.shields.io/badge/release-v1.0.3-blue)](#)
 [![PowerShell](https://img.shields.io/badge/PowerShell-7.6%20LTS%2B-5391FE?logo=powershell)](#requirements)
 [![Tests](https://img.shields.io/badge/tests-349%2F349%20passing-brightgreen)](#validation)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-Entra Object Inspector collects tenant data through Microsoft Graph, builds a deterministic snapshot, correlates identities and relationships, and produces evidence-backed findings and self-contained HTML reports.
+Entra Object Inspector captures Microsoft Entra identity state into a deterministic snapshot, reconstructs security-relevant relationships, and produces traceable observations backed by the evidence that caused them.
 
-[Quick start](#quick-start) · [What it covers](#what-it-covers) · [Requirements](#requirements) · [Permissions](#permissions) · [Docs](#usage) · [Security model](#security-model)
+**Collect once. Inspect offline. Compare over time. Trace every observation to evidence.**
+
+[Quick start](#quick-start) · [What it is](#what-it-is) · [Requirements](#requirements) · [Permissions](#permissions) · [Docs](#usage) · [Security model](#security-model)
 
 </div>
 
@@ -19,7 +21,7 @@ Entra Object Inspector collects tenant data through Microsoft Graph, builds a de
 
 ## Table of contents
 
-- [What it covers](#what-it-covers)
+- [What it is](#what-it-is)
 - [Screenshots](#screenshots)
 - [Requirements](#requirements)
 - [Permissions](#permissions)
@@ -42,21 +44,26 @@ Entra Object Inspector collects tenant data through Microsoft Graph, builds a de
 
 ---
 
-## What it covers
+## What it is
 
-| Area | Details |
+Entra Object Inspector is an **evidence-driven Microsoft Entra identity inspection engine**.
+
+It is built around the tenant's identity state and relationships rather than a checklist of configuration controls. The engine collects identity data once, preserves it as a portable snapshot, correlates relationships across objects and privilege, and explains security-relevant observations with their supporting evidence.
+
+### Inspect → Correlate → Explain
+
+| Capability | What it provides |
 |---|---|
-| Identities | Users and groups |
-| Applications | App registrations and service principals |
-| Relationships | Ownership, membership, permissions, and app-role assignments |
-| Privilege | Directory roles, role-assignable groups, active & eligible PIM schedule instances |
-| Scope | Administrative Unit boundaries |
-| Risk correlation | Risky-user privilege correlation, cross-object security observations |
-| Portability | Offline snapshots, snapshot comparison / drift assessment |
-| Targeting | Targeted assessments, rule packs, accepted-condition baselines |
-| Reporting | JSON, CSV, Markdown, diagnostics, evidence, and HTML reports |
+| Inspect | Deterministic identity-state snapshots covering users, groups, applications, service principals, permissions, directory roles, PIM, Administrative Units, and relevant risk context |
+| Correlate | Cross-object analysis of ownership, membership, application permissions, app-role assignments, privilege, scope, and risky-identity relationships |
+| Explain | Traceable observations identifying what was observed, why it matters, which objects contributed, and which collected evidence supports it |
+| Re-analyze | Portable offline inspection with zero Microsoft Graph requests after snapshot collection |
+| Compare | Snapshot-to-snapshot drift analysis for security-relevant identity changes |
+| Focus | Targeted object inspection, rule packs, and accepted-condition baselines without changing the core engine |
 
-> Entra Object Inspector is a read-only **assessment and investigation** tool. It does not remediate tenant configuration or calculate numerical risk scores.
+> **Not another posture scanner.** Entra Object Inspector does not model its primary output as a compliance score or a catalogue of configuration failures. It reconstructs Microsoft Entra identity state and relationships so security observations remain inspectable, reproducible, and evidence-backed.
+
+The tool remains strictly **read-only**. It does not remediate tenant configuration, calculate numerical risk scores, or execute attack paths.
 
 ## Screenshots
 
@@ -174,7 +181,7 @@ Set-Secret `
 
 > ⚠️ **Never commit** tenant identifiers, secrets, snapshots, reports, diagnostics, or exported assessment data.
 
-### 3. Run an assessment
+### 3. Run an inspection
 
 ```powershell
 Invoke-EntraSecurityAssessment `
@@ -182,11 +189,11 @@ Invoke-EntraSecurityAssessment `
     -OutputDirectory ".\EntraObjectInspector-Exports"
 ```
 
-See [Usage](#usage) below for snapshots, offline mode, drift comparison, and targeted assessments.
+See [Usage](#usage) below for snapshots, offline mode, drift comparison, and targeted inspection.
 
 ## Usage
 
-### Live tenant assessment
+### Live tenant inspection
 
 ```powershell
 Invoke-EntraSecurityAssessment `
@@ -194,7 +201,7 @@ Invoke-EntraSecurityAssessment `
     -OutputDirectory ".\EntraObjectInspector-Exports"
 ```
 
-### Live assessment with a saved snapshot
+### Live inspection with a saved snapshot
 
 ```powershell
 Invoke-EntraSecurityAssessment `
@@ -202,7 +209,7 @@ Invoke-EntraSecurityAssessment `
     -SaveSnapshotPath ".\snapshots\tenant.json"
 ```
 
-### Offline assessment from a snapshot
+### Offline inspection from a snapshot
 
 ```powershell
 Invoke-EntraSecurityAssessment `
@@ -238,11 +245,11 @@ Get-Help Invoke-EntraSecurityAssessment -Full
 
 ## Output
 
-Each assessment produces a timestamped package containing:
+Each run produces a timestamped evidence package containing:
 
-- **Three self-contained HTML reports** — main assessment, evidence, and diagnostics
+- **Three self-contained HTML reports** — main inspection, evidence, and diagnostics
 - Manifest, observations, grouped findings, object/evidence indexes, correlations, limitations, recommendations, and execution metadata
-- Assessment intelligence summary
+- Inspection intelligence summary
 
 > Generated output may contain sensitive tenant information — store and share it accordingly.
 
@@ -262,7 +269,7 @@ Invalid or unsupported filter values degrade gracefully to the normal local repo
 
 - Entra Object Inspector is **read-only end to end**. Tenant operations use Microsoft Graph `GET` requests.
 - High-volume collection may use Graph JSON batching (`$batch`), where the outer request is `POST` but every contained operation remains a read-only `GET`.
-- After snapshot collection, all assessment intelligence, correlation, export, and report generation run **offline** — no further Graph calls. `GraphCallsAfterSnapshot` is used as a release boundary check.
+- After snapshot collection, all inspection intelligence, correlation, export, and report generation run **offline** — no further Graph calls. `GraphCallsAfterSnapshot` is used as a release boundary check.
 
 ## Validation
 
